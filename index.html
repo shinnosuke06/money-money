@@ -49,7 +49,7 @@
                 confirmImportData: null, showSuccessModal: false, showBackupErrorModal: false, allocationReportModal: null,
                 exportData: '', importData: '', importMsg: { text: '', isError: false }, copySuccess: false,
                 saveMonthStr: '', manualHistoryMonth: '', selectedHistoryId: null, historyEditMode: null, tempHistoryEditData: null,
-                allocationEditModal: null, // ★追加：割り振り指示の編集モーダル用
+                allocationEditModal: null, 
             },
 
             getIconHTML: function(name, size = 24, className = '') { return `<span class="material-symbols-outlined ${className}" style="font-size: ${size}px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;">${ICON_MAP[name] || name}</span>`; },
@@ -78,6 +78,7 @@
             getCurrentMonthStr: function() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; },
             getPreviousMonthStr: function() { const d = new Date(); d.setMonth(d.getMonth() - 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; },
             cleanInput: function(val) { return String(val || '').replace(/,/g, ''); },
+            
             getNiceMax: function(val) {
                 if (val <= 0) return 40000;
                 const pow = Math.pow(10, Math.floor(Math.log10(val))); const frac = val / pow;
@@ -89,7 +90,6 @@
                 for (let key of keys) { try { const d = localStorage.getItem(key); if (d) { const p = JSON.parse(d); if (Array.isArray(p)) return p; } } catch(e) {} }
                 return [];
             },
-
             loadData: function() {
                 App.state.accounts = App.safeLoadArray([STORAGE_KEY + 'accounts', 'mpm_vanilla_v8_accounts', 'mpm_vanilla_v7_accounts']);
                 App.state.wallets = App.safeLoadArray([STORAGE_KEY + 'wallets', 'mpm_vanilla_v8_wallets', 'mpm_vanilla_v7_wallets']);
@@ -411,6 +411,7 @@
                     const a = document.createElement('a'); a.href = url; a.download = '資産管理.txt'; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
                 } catch (e) { App.state.showBackupErrorModal = true; App.render(); }
             },
+            
             triggerSaveHistory: function() {
                 const monthStr = document.getElementById('manualHistoryMonth').value; if (!monthStr) return; const [year, month] = monthStr.split('-');
                 App.state.preSaveModal = { id: monthStr, label: `${year.slice(2)}年${parseInt(month, 10)}月`, payment: App.totals.totalPaymentsNum, balance: App.totals.calculatedEndBalance, income: App.totals.totalIncomesList, catTotals: App.totals.allCatTotals, details: App.createHistoryDetails(), incomeDetails: App.createIncomeDetails() };
@@ -460,7 +461,10 @@
                 txt += "\n【入金】\n";
                 App.state.incomes.forEach(i => { const allocsBase64 = (i.autoAllocations && i.autoAllocations.length > 0) ? btoa(unescape(encodeURIComponent(JSON.stringify(i.autoAllocations)))) : ''; txt += `${i.id},${i.name},${i.amount||0},${i.isFixed?1:0},${i.isDone?1:0},${App.safeMemo(i.memo)},${App.safeMemo(i.targetId||'')},${allocsBase64}\n`; });
                 txt += "\n【支払い】\n";
-                App.state.payments.forEach(p => { txt += `${p.id},${p.name},${p.amount||0},${p.dueDate||''},${p.accountId||''},${p.category||'variable'},${p.isDone?1:0},${App.safeMemo(p.memo)},${p.endDate||''}\n`; if (p.subItems && p.subItems.length > 0) p.subItems.forEach(s => { txt += `>${s.id},${s.name},${s.amount||0},${s.category||'variable'},${s.endDate||''},${App.safeMemo(s.memo)}\n`; }); });
+                App.state.payments.forEach(p => {
+                    txt += `${p.id},${p.name},${p.amount||0},${p.dueDate||''},${p.accountId||''},${p.category||'variable'},${p.isDone?1:0},${App.safeMemo(p.memo)},${p.endDate||''}\n`;
+                    if (p.subItems && p.subItems.length > 0) p.subItems.forEach(s => { txt += `>${s.id},${s.name},${s.amount||0},${s.category||'variable'},${s.endDate||''},${App.safeMemo(s.memo)}\n`; });
+                });
                 txt += "\n【特別支出】\n";
                 App.state.specialPayments.forEach(sp => { txt += `${sp.id},${sp.name},${sp.amount||0},${sp.targetMonth||''},${sp.isDone?1:0},${App.safeMemo(sp.memo)}\n`; });
                 txt += "\n【メモ】\n";
@@ -499,7 +503,9 @@
                 App.saveData(); App.render();
             },
 
-            renderSortButtons: function(type, index, isFirst, isLast) { return `<div class="flex flex-col mr-2 items-center justify-center shrink-0"><button type="button" onclick="App.moveItem('${type}', ${index}, -1, event)" ${isFirst ? 'disabled' : ''} class="p-1.5 ${isFirst ? 'text-gray-200' : 'text-gray-400 hover:bg-gray-100'} rounded">${App.getIconHTML('chevron-up', 20)}</button><button type="button" onclick="App.moveItem('${type}', ${index}, 1, event)" ${isLast ? 'disabled' : ''} class="p-1.5 ${isLast ? 'text-gray-200' : 'text-gray-400 hover:bg-gray-100'} rounded">${App.getIconHTML('chevron-down', 20)}</button></div>`; },
+            renderSortButtons: function(type, index, isFirst, isLast) {
+                return `<div class="flex flex-col mr-2 items-center justify-center shrink-0"><button type="button" onclick="App.moveItem('${type}', ${index}, -1, event)" ${isFirst ? 'disabled' : ''} class="p-1.5 ${isFirst ? 'text-gray-200' : 'text-gray-400 hover:bg-gray-100'} rounded">${App.getIconHTML('chevron-up', 20)}</button><button type="button" onclick="App.moveItem('${type}', ${index}, 1, event)" ${isLast ? 'disabled' : ''} class="p-1.5 ${isLast ? 'text-gray-200' : 'text-gray-400 hover:bg-gray-100'} rounded">${App.getIconHTML('chevron-down', 20)}</button></div>`;
+            },
             renderCategorySelect: function(name, val) { return `<select name="${name}" class="w-24 px-1 py-1 text-xs border rounded">${Object.entries(CAT_LABELS).map(([k, d]) => `<option value="${k}" ${val === k ? 'selected' : ''}>${d.label}</option>`).join('')}</select>`; },
             renderCategorySelectLg: function(name, val) { return `<select name="${name}" class="flex-1 px-2 py-1.5 text-sm border rounded bg-white font-bold text-gray-700">${Object.entries(CAT_LABELS).map(([k, d]) => `<option value="${k}" ${val === k ? 'selected' : ''}>${d.label}</option>`).join('')}</select>`; },
             renderAccountSelect: function(name, val) { return `<select name="${name}" class="flex-1 px-2 py-1.5 text-sm border rounded bg-white"><option value="">口座未定</option>${App.state.accounts.map(a => `<option value="${a.id}" ${Number(val) === a.id ? 'selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}</select>`; },
@@ -515,12 +521,12 @@
                             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
                                 <div class="flex items-center gap-3">${App.getIconHTML('calculator', 32, 'text-indigo-600')}<h1 class="text-2xl font-bold text-gray-800">毎月の支払い管理</h1></div>
                                 <div class="flex bg-white rounded-lg shadow-sm border p-1 overflow-x-auto hide-scrollbar">
-                                    <button onclick="App.setTab('dashboard')" class="flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-bold whitespace-nowrap transition-colors ${App.state.activeTab === 'dashboard' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}">${App.getIconHTML('wallet', 20)} ダッシュボード</button>
-                                    <button onclick="App.setTab('cashflow')" class="flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-bold whitespace-nowrap transition-colors ${App.state.activeTab === 'cashflow' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}">${App.getIconHTML('layout-dashboard', 20)} キャッシュフロー</button>
-                                    <button onclick="App.setTab('special')" class="flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-bold whitespace-nowrap transition-colors ${App.state.activeTab === 'special' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}">${App.getIconHTML('savings', 20)} 特別支出(積立)</button>
-                                    <button onclick="App.setTab('memos')" class="flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-bold whitespace-nowrap transition-colors ${App.state.activeTab === 'memos' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}">${App.getIconHTML('event_note', 20)} 予定・メモ</button>
-                                    <button onclick="App.setTab('history')" class="flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-bold whitespace-nowrap transition-colors ${App.state.activeTab === 'history' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}">${App.getIconHTML('bar-chart-3', 20)} 推移グラフ</button>
-                                    <button onclick="App.setTab('settings')" class="flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-bold whitespace-nowrap transition-colors ${App.state.activeTab === 'settings' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}">${App.getIconHTML('settings', 20)} 設定</button>
+                                    <button onclick="App.setTab('dashboard')" class="shrink-0 flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-md text-[13px] sm:text-sm font-bold whitespace-nowrap transition-colors ${App.state.activeTab === 'dashboard' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}">${App.getIconHTML('wallet', 18)} ダッシュボード</button>
+                                    <button onclick="App.setTab('cashflow')" class="shrink-0 flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-md text-[13px] sm:text-sm font-bold whitespace-nowrap transition-colors ${App.state.activeTab === 'cashflow' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}">${App.getIconHTML('layout-dashboard', 18)} キャッシュフロー</button>
+                                    <button onclick="App.setTab('special')" class="shrink-0 flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-md text-[13px] sm:text-sm font-bold whitespace-nowrap transition-colors ${App.state.activeTab === 'special' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}">${App.getIconHTML('savings', 18)} 特別支出(積立)</button>
+                                    <button onclick="App.setTab('memos')" class="shrink-0 flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-md text-[13px] sm:text-sm font-bold whitespace-nowrap transition-colors ${App.state.activeTab === 'memos' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}">${App.getIconHTML('event_note', 18)} 予定・メモ</button>
+                                    <button onclick="App.setTab('history')" class="shrink-0 flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-md text-[13px] sm:text-sm font-bold whitespace-nowrap transition-colors ${App.state.activeTab === 'history' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}">${App.getIconHTML('bar-chart-3', 18)} 推移グラフ</button>
+                                    <button onclick="App.setTab('settings')" class="shrink-0 flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-md text-[13px] sm:text-sm font-bold whitespace-nowrap transition-colors ${App.state.activeTab === 'settings' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}">${App.getIconHTML('settings', 18)} 設定</button>
                                 </div>
                             </div>
                     `;
@@ -537,7 +543,15 @@
                     console.error("描画エラー:", error);
                     const appDiv = document.getElementById('app');
                     if (appDiv) {
-                        appDiv.innerHTML = `<div class="p-8 text-center bg-red-50 text-red-700 min-h-screen flex flex-col items-center justify-center animate-fade-in"><span class="material-symbols-outlined text-6xl mb-4 text-red-500">error</span><h1 class="text-xl font-bold mb-2">画面の表示中にエラーが発生しました</h1><p class="mb-4 text-sm font-bold text-red-600">※データは消えていません。画面が真っ白になるのを防ぐため、この画面を表示しています。</p><p class="mb-8 text-xs bg-white p-4 rounded border border-red-200 text-left w-full max-w-md overflow-auto text-gray-500">${escapeHTML(error.message)}</p><button onclick="window.location.reload()" class="px-6 py-3 bg-red-600 text-white rounded-lg font-bold mb-4 shadow-md transition-colors hover:bg-red-700">画面を再読み込みする</button></div>`;
+                        appDiv.innerHTML = `
+                            <div class="p-8 text-center bg-red-50 text-red-700 min-h-screen flex flex-col items-center justify-center animate-fade-in">
+                                <span class="material-symbols-outlined text-6xl mb-4 text-red-500">error</span>
+                                <h1 class="text-xl font-bold mb-2">画面の表示中にエラーが発生しました</h1>
+                                <p class="mb-4 text-sm font-bold text-red-600">※ご安心ください。データは消えていません。<br>画面が真っ白になるのを防ぐため、この画面を表示しています。</p>
+                                <p class="mb-8 text-xs bg-white p-4 rounded border border-red-200 text-left w-full max-w-md overflow-auto text-gray-500">${escapeHTML(error.message)}</p>
+                                <button onclick="window.location.reload()" class="px-6 py-3 bg-red-600 text-white rounded-lg font-bold mb-4 shadow-md transition-colors hover:bg-red-700">画面を再読み込みする</button>
+                            </div>
+                        `;
                     }
                 }
             },
@@ -546,10 +560,10 @@
                 const s = App.state;
                 let html = `
                     <div class="space-y-4 animate-fade-in">
-                        <div class="flex gap-2 mb-6 border-b border-gray-200 pb-2 overflow-x-auto hide-scrollbar">
-                            <button onclick="App.setDashTab('accounts')" class="px-4 py-2 text-sm font-bold rounded-t-lg transition-colors flex items-center gap-2 ${s.dashTab === 'accounts' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-100'}">${App.getIconHTML('wallet', 18)}口座と現金</button>
-                            <button onclick="App.setDashTab('incomes')" class="px-4 py-2 text-sm font-bold rounded-t-lg transition-colors flex items-center gap-2 ${s.dashTab === 'incomes' ? 'bg-emerald-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-100'}">${App.getIconHTML('arrow-down-to-line', 18)}入金予定</button>
-                            <button onclick="App.setDashTab('payments')" class="px-4 py-2 text-sm font-bold rounded-t-lg transition-colors flex items-center gap-2 ${s.dashTab === 'payments' ? 'bg-rose-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-100'}">${App.getIconHTML('arrow-up-from-line', 18)}支払い・ローン</button>
+                        <div class="flex gap-1 sm:gap-2 mb-6 border-b border-gray-200 pb-2 overflow-x-auto hide-scrollbar">
+                            <button onclick="App.setDashTab('accounts')" class="shrink-0 px-3 py-2 sm:px-4 text-[13px] sm:text-sm font-bold rounded-t-lg transition-colors flex items-center gap-1.5 ${s.dashTab === 'accounts' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-100'}">${App.getIconHTML('wallet', 16)}口座と現金</button>
+                            <button onclick="App.setDashTab('incomes')" class="shrink-0 px-3 py-2 sm:px-4 text-[13px] sm:text-sm font-bold rounded-t-lg transition-colors flex items-center gap-1.5 ${s.dashTab === 'incomes' ? 'bg-emerald-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-100'}">${App.getIconHTML('arrow-down-to-line', 16)}入金予定</button>
+                            <button onclick="App.setDashTab('payments')" class="shrink-0 px-3 py-2 sm:px-4 text-[13px] sm:text-sm font-bold rounded-t-lg transition-colors flex items-center gap-1.5 ${s.dashTab === 'payments' ? 'bg-rose-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-100'}">${App.getIconHTML('arrow-up-from-line', 16)}支払い・ローン</button>
                         </div>
                 `;
                 if (s.dashTab === 'accounts') html += App.renderAccountsAndWallets();
@@ -573,39 +587,107 @@
                 `;
                 s.accounts.forEach((item, index) => {
                     if (s.editMode && s.editMode.type === 'account' && s.editMode.id === item.id) {
-                        html += `<form onsubmit="App.saveEdit(event, 'account', ${item.id})" class="bg-white rounded-lg p-3 shadow-inner border border-blue-200"><div class="flex gap-2 mb-2"><input name="name" type="text" value="${escapeHTML(item.name)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="口座名" required/><input name="amount" type="text" value="${escapeHTML(item.amount)}" class="w-24 px-2 py-1 text-sm border rounded" placeholder="現在残高"/></div><div class="flex gap-2 mb-2"><input name="incomingAmount" type="text" value="${escapeHTML(item.incomingAmount)}" class="flex-1 px-2 py-1 text-sm border rounded bg-emerald-50" placeholder="入金予定"/><div class="flex items-center gap-1 border bg-gray-50 rounded px-2"><span class="text-[10px] font-bold text-gray-500 whitespace-nowrap">固定割当:</span><input name="fixedAllocation" type="text" value="${escapeHTML(item.fixedAllocation)}" class="w-16 py-1 text-sm outline-none bg-transparent" placeholder="額"/></div></div><div class="flex justify-between items-center"><label class="text-[10px] font-bold text-blue-800 flex items-center gap-1"><input name="isSurplusDest" type="checkbox" ${item.isSurplusDest ? 'checked' : ''} class="rounded"/>余剰金を優先入金</label><div class="flex gap-2"><button type="button" onclick="App.cancelEdit()" class="px-3 py-1 text-xs border rounded bg-gray-50 font-bold text-gray-600">ｷｬﾝｾﾙ</button><button type="submit" class="px-3 py-1 text-xs text-white bg-blue-600 rounded font-bold">保存</button></div></div></form>`;
+                        html += `
+                            <form onsubmit="App.saveEdit(event, 'account', ${item.id})" class="bg-white rounded-lg p-3 shadow-inner border border-blue-200">
+                                <div class="flex gap-2 mb-2"><input name="name" type="text" value="${escapeHTML(item.name)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="口座名" required/><input name="amount" type="text" value="${escapeHTML(item.amount)}" class="w-24 px-2 py-1 text-sm border rounded" placeholder="現在残高"/></div>
+                                <div class="flex gap-2 mb-2"><input name="incomingAmount" type="text" value="${escapeHTML(item.incomingAmount)}" class="flex-1 px-2 py-1 text-sm border rounded bg-emerald-50" placeholder="入金予定"/><div class="flex items-center gap-1 border bg-gray-50 rounded px-2"><span class="text-[10px] font-bold text-gray-500 whitespace-nowrap">固定割当:</span><input name="fixedAllocation" type="text" value="${escapeHTML(item.fixedAllocation)}" class="w-16 py-1 text-sm outline-none bg-transparent" placeholder="額"/></div></div>
+                                <div class="flex justify-between items-center"><label class="text-[10px] font-bold text-blue-800 flex items-center gap-1"><input name="isSurplusDest" type="checkbox" ${item.isSurplusDest ? 'checked' : ''} class="rounded"/>余剰金を優先入金</label><div class="flex gap-2"><button type="button" onclick="App.cancelEdit()" class="px-3 py-1 text-xs border rounded bg-gray-50 font-bold text-gray-600">ｷｬﾝｾﾙ</button><button type="submit" class="px-3 py-1 text-xs text-white bg-blue-600 rounded font-bold">保存</button></div></div>
+                            </form>
+                        `;
                     } else {
                         const totalOut = s.payments.filter(p => p.accountId === item.id && !p.isDone).reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
                         const incAmt = item.isIncomingDone ? 0 : App.calcAmount(item.incomingAmount);
                         const expectedBal = App.calcAmount(item.amount) + incAmt - totalOut;
                         const isShort = expectedBal < 0;
-                        html += `<div class="bg-white rounded-lg p-3 shadow-sm border border-gray-100 flex hover:shadow-md cursor-pointer transition-all" onclick="App.openAccountPopup(${item.id})">${App.renderSortButtons('account', index, index === 0, index === s.accounts.length - 1)}<div class="flex-1 min-w-0"><div class="flex justify-between items-start mb-1"><div class="flex flex-col min-w-0 pr-2"><div class="flex items-center gap-1"><span class="font-bold text-gray-800 truncate">${escapeHTML(item.name)}</span>${item.isSurplusDest ? `<span class="text-[9px] bg-blue-100 text-blue-700 px-1 py-0.5 rounded font-black whitespace-nowrap">優先</span>` : ''}</div>${item.fixedAllocation ? `<span class="text-[9px] text-gray-400 font-bold">固定割当: ${App.formatCurrency(item.fixedAllocation)}</span>` : ''}</div><div class="flex gap-1 shrink-0">${App.calcAmount(item.incomingAmount) > 0 ? `<button type="button" onclick="App.toggleDone('account', ${item.id}, event)" class="text-[10px] px-1.5 py-0.5 rounded border font-bold flex items-center ${item.isIncomingDone ? 'bg-emerald-100 text-emerald-800' : 'text-gray-500'}">${App.getIconHTML(item.isIncomingDone ? 'check' : 'done', 12)} 入金${item.isIncomingDone ? '済' : '予定'}</button>` : ''}<button type="button" onclick="App.startEdit('account', ${item.id}, event)" class="text-gray-400 hover:text-blue-500 p-0.5">${App.getIconHTML('pencil', 16)}</button><button type="button" onclick="App.requestDelete('account', ${item.id}, '${escapeHTML(item.name)}', event)" class="text-gray-400 hover:text-red-500 p-0.5">${App.getIconHTML('trash-2', 16)}</button></div></div>${item.memo ? `<div class="text-[10px] text-gray-400 mb-2 truncate">${App.getIconHTML('message-square', 10)} ${escapeHTML(item.memo)}</div>` : ''}<div class="flex justify-between items-end gap-2 mt-1"><div class="flex-1 min-w-0"><span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">現在残高</span><span class="font-bold text-xl text-gray-800 break-words">${App.formatCurrency(item.amount)}</span>${App.calcAmount(item.incomingAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isIncomingDone ? 'text-gray-400 line-through font-normal' : 'text-emerald-600'}">+${App.getDisplayAmountHTML(item.incomingAmount, "inline-flex flex-row gap-1 items-baseline")}</div>` : ''}</div>${(totalOut > 0 || incAmt > 0) ? `<div class="flex-1 text-right pl-2 border-l border-gray-100 min-w-0"><span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">引落後予想</span><span class="font-bold text-xl break-words ${isShort ? 'text-red-600' : 'text-emerald-600'}">${isShort ? App.getIconHTML('alert-triangle', 14, 'inline mr-1 mb-0.5') : ''}${App.formatCurrency(expectedBal)}</span></div>` : ''}</div></div></div>`;
+                        html += `
+                            <div class="bg-white rounded-lg p-3 shadow-sm border border-gray-100 flex hover:shadow-md cursor-pointer transition-all" onclick="App.openAccountPopup(${item.id})">
+                                ${App.renderSortButtons('account', index, index === 0, index === s.accounts.length - 1)}
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex justify-between items-start mb-1">
+                                        <div class="flex flex-col min-w-0 pr-2">
+                                            <div class="flex items-center gap-1"><span class="font-bold text-gray-800 truncate">${escapeHTML(item.name)}</span>${item.isSurplusDest ? `<span class="text-[9px] bg-blue-100 text-blue-700 px-1 py-0.5 rounded font-black whitespace-nowrap">優先</span>` : ''}</div>
+                                            ${item.fixedAllocation ? `<span class="text-[9px] text-gray-400 font-bold">固定割当: ${App.formatCurrency(item.fixedAllocation)}</span>` : ''}
+                                        </div>
+                                        <div class="flex gap-1 shrink-0">
+                                            ${App.calcAmount(item.incomingAmount) > 0 ? `<button type="button" onclick="App.toggleDone('account', ${item.id}, event)" class="text-[10px] px-1.5 py-0.5 rounded border font-bold flex items-center ${item.isIncomingDone ? 'bg-emerald-100 text-emerald-800' : 'text-gray-500'}">${App.getIconHTML(item.isIncomingDone ? 'check' : 'done', 12)} 入金${item.isIncomingDone ? '済' : '予定'}</button>` : ''}
+                                            <button type="button" onclick="App.startEdit('account', ${item.id}, event)" class="text-gray-400 hover:text-blue-500 p-0.5">${App.getIconHTML('pencil', 16)}</button>
+                                            <button type="button" onclick="App.requestDelete('account', ${item.id}, '${escapeHTML(item.name)}', event)" class="text-gray-400 hover:text-red-500 p-0.5">${App.getIconHTML('trash-2', 16)}</button>
+                                        </div>
+                                    </div>
+                                    ${item.memo ? `<div class="text-[10px] text-gray-400 mb-2 truncate">${App.getIconHTML('message-square', 10)} ${escapeHTML(item.memo)}</div>` : ''}
+                                    <div class="flex justify-between items-end gap-2">
+                                        <div class="flex-1 min-w-0"><span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">現在残高</span><span class="font-bold text-xl text-gray-800 break-words">${App.formatCurrency(item.amount)}</span>${App.calcAmount(item.incomingAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isIncomingDone ? 'text-gray-400 line-through font-normal' : 'text-emerald-600'}">+${App.getDisplayAmountHTML(item.incomingAmount, "inline-flex flex-row gap-1 items-baseline")}</div>` : ''}</div>
+                                        ${(totalOut > 0 || incAmt > 0) ? `<div class="flex-1 text-right pl-2 border-l border-gray-100 min-w-0"><span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">引落後予想</span><span class="font-bold text-xl break-words ${isShort ? 'text-red-600' : 'text-emerald-600'}">${isShort ? App.getIconHTML('alert-triangle', 14, 'inline mr-1 mb-0.5') : ''}${App.formatCurrency(expectedBal)}</span></div>` : ''}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
                     }
                 });
                 html += `
                         </div>
-                        <form onsubmit="App.addAccount(event, this)" class="bg-white p-3 rounded-lg border shadow-sm flex flex-col gap-2">
-                            <div class="flex flex-col sm:flex-row gap-2"><input name="accName" type="text" placeholder="口座名" required class="flex-1 w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-200"/><input name="accAmount" type="text" placeholder="現在の金額" required class="flex-1 w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-200"/></div>
-                            <div class="flex justify-between items-center mt-1"><label class="text-[10px] font-bold text-blue-800 flex items-center gap-1 w-full"><input name="accIsSurplusDest" type="checkbox" class="rounded"/>余剰金を優先入金する口座にする</label><button type="submit" class="px-6 py-2 bg-blue-500 text-white font-bold rounded-lg hover:bg-blue-600 transition-colors flex items-center justify-center gap-1 shrink-0">${App.getIconHTML('plus', 18)} 追加</button></div>
+                        <form onsubmit="App.addAccount(event, this)" class="bg-white p-3 rounded-lg border shadow-sm flex flex-col sm:flex-row gap-2">
+                            <input name="accName" type="text" placeholder="口座名" required class="flex-1 w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-200"/>
+                            <div class="flex gap-2 w-full sm:w-auto">
+                                <input name="accAmount" type="text" placeholder="現在の金額" required class="flex-1 w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-200"/>
+                                <button type="submit" class="px-4 py-2 bg-blue-500 text-white font-bold rounded-lg hover:bg-blue-600 transition-colors flex items-center justify-center gap-1 shrink-0">${App.getIconHTML('plus', 18)} 追加</button>
+                            </div>
                         </form>
                     </div>
+                `;
+
+                html += `
                     <div class="rounded-2xl p-5 shadow-sm border bg-amber-50/50 border-amber-100">
                         <div class="flex items-center justify-between mb-4"><h3 class="text-lg font-bold flex items-center gap-2 text-amber-700">${App.getIconHTML('payments', 24)} 手元現金</h3><div class="text-right"><span class="text-xs text-amber-600 font-bold block mb-1">合計</span><span class="font-black text-xl text-amber-800">${App.formatCurrency(App.totals.totalWalletsNum)}</span></div></div>
                         <div class="space-y-3 mb-4">
                 `;
                 s.wallets.forEach((item, index) => {
                     if (s.editMode && s.editMode.type === 'wallet' && s.editMode.id === item.id) {
-                        html += `<form onsubmit="App.saveEdit(event, 'wallet', ${item.id})" class="bg-white rounded-lg p-3 shadow-inner border border-amber-200"><div class="flex gap-2 mb-2"><input name="name" type="text" value="${escapeHTML(item.name)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="名称" required/><input name="amount" type="text" value="${escapeHTML(item.amount)}" class="w-24 px-2 py-1 text-sm border rounded" placeholder="残高 (数式OK)"/></div><div class="flex gap-2 mb-2"><input name="incomingAmount" type="text" value="${escapeHTML(item.incomingAmount)}" class="flex-1 px-2 py-1 text-sm border rounded bg-emerald-50" placeholder="入金予定"/><div class="flex items-center gap-1 border bg-gray-50 rounded px-2"><span class="text-[10px] font-bold text-gray-500 whitespace-nowrap">固定割当:</span><input name="fixedAllocation" type="text" value="${escapeHTML(item.fixedAllocation)}" class="w-16 py-1 text-sm outline-none bg-transparent" placeholder="額"/></div></div><div class="flex gap-2 mb-2"><input name="outgoAmount" type="text" value="${escapeHTML(item.outgoAmount)}" class="w-24 px-2 py-1 text-sm border rounded bg-rose-50" placeholder="消費予定"/><input name="memo" type="text" value="${escapeHTML(item.memo)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="メモ"/></div><div class="flex justify-between items-center"><label class="text-[10px] font-bold text-amber-800 flex items-center gap-1"><input name="isOutgoFixed" type="checkbox" ${item.isOutgoFixed ? 'checked' : ''} class="rounded"/>毎月固定(消費)</label><div class="flex gap-2"><button type="button" onclick="App.cancelEdit()" class="px-3 py-1 text-xs border rounded bg-gray-50 font-bold text-gray-600">ｷｬﾝｾﾙ</button><button type="submit" class="px-3 py-1 text-xs text-white bg-amber-600 rounded font-bold">保存</button></div></div></form>`;
+                        html += `
+                            <form onsubmit="App.saveEdit(event, 'wallet', ${item.id})" class="bg-white rounded-lg p-3 shadow-inner border border-amber-200">
+                                <div class="flex gap-2 mb-2"><input name="name" type="text" value="${escapeHTML(item.name)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="名称" required/><input name="amount" type="text" value="${escapeHTML(item.amount)}" class="w-24 px-2 py-1 text-sm border rounded" placeholder="残高 (数式OK)"/></div>
+                                <div class="flex gap-2 mb-2">
+                                    <input name="incomingAmount" type="text" value="${escapeHTML(item.incomingAmount)}" class="flex-1 px-2 py-1 text-sm border rounded bg-emerald-50" placeholder="入金予定"/>
+                                    <div class="flex items-center gap-1 border bg-gray-50 rounded px-2"><span class="text-[10px] font-bold text-gray-500 whitespace-nowrap">固定割当:</span><input name="fixedAllocation" type="text" value="${escapeHTML(item.fixedAllocation)}" class="w-16 py-1 text-sm outline-none bg-transparent" placeholder="額"/></div>
+                                </div>
+                                <div class="flex gap-2 mb-2"><input name="outgoAmount" type="text" value="${escapeHTML(item.outgoAmount)}" class="w-24 px-2 py-1 text-sm border rounded bg-rose-50" placeholder="消費予定"/><input name="memo" type="text" value="${escapeHTML(item.memo)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="メモ"/></div>
+                                <div class="flex justify-between items-center"><label class="text-[10px] font-bold text-amber-800 flex items-center gap-1"><input name="isOutgoFixed" type="checkbox" ${item.isOutgoFixed ? 'checked' : ''} class="rounded"/>毎月固定(消費)</label><div class="flex gap-2"><button type="button" onclick="App.cancelEdit()" class="px-3 py-1 text-xs border rounded bg-gray-50 font-bold text-gray-600">ｷｬﾝｾﾙ</button><button type="submit" class="px-3 py-1 text-xs text-white bg-amber-600 rounded font-bold">保存</button></div></div>
+                            </form>
+                        `;
                     } else {
-                        const activeOut = item.isOutgoDone ? 0 : App.calcAmount(item.outgoAmount); const incAmt = item.isIncomingDone ? 0 : App.calcAmount(item.incomingAmount); const expectedBal = App.calcAmount(item.amount) + incAmt - activeOut; const isShort = expectedBal < 0;
-                        html += `<div class="bg-white rounded-lg p-3 shadow-sm border border-gray-100 flex hover:shadow-md transition-all">${App.renderSortButtons('wallet', index, index === 0, index === s.wallets.length - 1)}<div class="flex-1 min-w-0"><div class="flex justify-between items-start mb-1"><div class="flex flex-col min-w-0 pr-2"><span class="font-bold text-gray-800 truncate">${escapeHTML(item.name)}</span>${item.fixedAllocation ? `<span class="text-[9px] text-gray-400 font-bold">固定割当: ${App.formatCurrency(item.fixedAllocation)}</span>` : ''}</div><div class="flex flex-col gap-1 shrink-0 items-end">${App.calcAmount(item.incomingAmount) > 0 ? `<button type="button" onclick="App.toggleDone('wallet_inc', ${item.id}, event)" class="text-[10px] px-1.5 py-0.5 rounded border font-bold flex items-center ${item.isIncomingDone ? 'bg-emerald-100 text-emerald-800' : 'text-gray-500'}">${App.getIconHTML(item.isIncomingDone ? 'check' : 'done', 12)} 入金${item.isIncomingDone ? '済' : '予定'}</button>` : ''}<div class="flex gap-1">${App.calcAmount(item.outgoAmount) > 0 ? `<button type="button" onclick="App.toggleDone('wallet', ${item.id}, event)" class="text-[10px] px-1.5 py-0.5 rounded border font-bold flex items-center ${item.isOutgoDone ? 'bg-amber-100 text-amber-800' : 'text-gray-500'}">${App.getIconHTML(item.isOutgoDone ? 'check' : 'done', 12)} 消費${item.isOutgoDone ? '済' : '予定'}</button>` : ''}<button type="button" onclick="App.startEdit('wallet', ${item.id}, event)" class="text-gray-400 hover:text-amber-500 p-0.5">${App.getIconHTML('pencil', 16)}</button><button type="button" onclick="App.requestDelete('wallet', ${item.id}, '${escapeHTML(item.name)}', event)" class="text-gray-400 hover:text-red-500 p-0.5">${App.getIconHTML('trash-2', 16)}</button></div></div></div>${item.memo ? `<div class="text-[10px] text-gray-400 mb-2 truncate">${App.getIconHTML('message-square', 10)} ${escapeHTML(item.memo)}</div>` : ''}<div class="flex justify-between items-end gap-2"><div class="flex-1"><span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">現在残高</span><span class="font-bold text-xl text-gray-800 break-words">${App.formatCurrency(item.amount)}</span>${App.calcAmount(item.incomingAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isIncomingDone ? 'text-gray-400 line-through font-normal' : 'text-emerald-600'}">+${App.getDisplayAmountHTML(item.incomingAmount, "inline-flex flex-row gap-1 items-baseline")}</div>` : ''}${App.calcAmount(item.outgoAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isOutgoDone ? 'text-gray-400 line-through font-normal' : 'text-rose-600'}">-${App.getDisplayAmountHTML(item.outgoAmount, "inline-flex flex-row gap-1 items-baseline")}</div>` : ''}</div>${activeOut > 0 ? `<div class="flex-1 text-right pl-2 border-l border-gray-100"><span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">消費後予想</span><span class="font-bold text-sm ${isShort ? 'text-red-600' : 'text-amber-600'}">${App.formatCurrency(expectedBal)}</span></div>` : ''}</div></div></div>`;
+                        const activeOut = item.isOutgoDone ? 0 : App.calcAmount(item.outgoAmount);
+                        const incAmt = item.isIncomingDone ? 0 : App.calcAmount(item.incomingAmount);
+                        const expectedBal = App.calcAmount(item.amount) + incAmt - activeOut;
+                        const isShort = expectedBal < 0;
+                        html += `
+                            <div class="bg-white rounded-lg p-3 shadow-sm border border-gray-100 flex hover:shadow-md transition-all">
+                                ${App.renderSortButtons('wallet', index, index === 0, index === s.wallets.length - 1)}
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex justify-between items-start mb-1">
+                                        <div class="flex flex-col min-w-0 pr-2"><span class="font-bold text-gray-800 truncate">${escapeHTML(item.name)}</span>${item.fixedAllocation ? `<span class="text-[9px] text-gray-400 font-bold">固定割当: ${App.formatCurrency(item.fixedAllocation)}</span>` : ''}</div>
+                                        <div class="flex flex-col gap-1 shrink-0 items-end">
+                                            ${App.calcAmount(item.incomingAmount) > 0 ? `<button type="button" onclick="App.toggleDone('wallet_inc', ${item.id}, event)" class="text-[10px] px-1.5 py-0.5 rounded border font-bold flex items-center ${item.isIncomingDone ? 'bg-emerald-100 text-emerald-800' : 'text-gray-500'}">${App.getIconHTML(item.isIncomingDone ? 'check' : 'done', 12)} 入金${item.isIncomingDone ? '済' : '予定'}</button>` : ''}
+                                            <div class="flex gap-1">${App.calcAmount(item.outgoAmount) > 0 ? `<button type="button" onclick="App.toggleDone('wallet', ${item.id}, event)" class="text-[10px] px-1.5 py-0.5 rounded border font-bold flex items-center ${item.isOutgoDone ? 'bg-amber-100 text-amber-800' : 'text-gray-500'}">${App.getIconHTML(item.isOutgoDone ? 'check' : 'done', 12)} 消費${item.isOutgoDone ? '済' : '予定'}</button>` : ''}<button type="button" onclick="App.startEdit('wallet', ${item.id}, event)" class="text-gray-400 hover:text-amber-500 p-0.5">${App.getIconHTML('pencil', 16)}</button><button type="button" onclick="App.requestDelete('wallet', ${item.id}, '${escapeHTML(item.name)}', event)" class="text-gray-400 hover:text-red-500 p-0.5">${App.getIconHTML('trash-2', 16)}</button></div>
+                                        </div>
+                                    </div>
+                                    ${item.memo ? `<div class="text-[10px] text-gray-400 mb-2 truncate">${App.getIconHTML('message-square', 10)} ${escapeHTML(item.memo)}</div>` : ''}
+                                    <div class="flex justify-between items-end gap-2">
+                                        <div class="flex-1"><span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">現在残高</span><span class="font-bold text-xl text-gray-800 break-words">${App.formatCurrency(item.amount)}</span>${App.calcAmount(item.incomingAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isIncomingDone ? 'text-gray-400 line-through font-normal' : 'text-emerald-600'}">+${App.getDisplayAmountHTML(item.incomingAmount, "inline-flex flex-row gap-1 items-baseline")}</div>` : ''}${App.calcAmount(item.outgoAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isOutgoDone ? 'text-gray-400 line-through font-normal' : 'text-rose-600'}">-${App.getDisplayAmountHTML(item.outgoAmount, "inline-flex flex-row gap-1 items-baseline")}</div>` : ''}</div>
+                                        ${activeOut > 0 ? `<div class="flex-1 text-right pl-2 border-l border-gray-100"><span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">消費後予想</span><span class="font-bold text-sm ${isShort ? 'text-red-600' : 'text-amber-600'}">${App.formatCurrency(expectedBal)}</span></div>` : ''}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
                     }
                 });
                 html += `
                         </div>
                         <form onsubmit="App.addWallet(event, this)" class="bg-white p-3 rounded-lg border shadow-sm flex flex-col sm:flex-row gap-2">
                             <input name="walName" type="text" placeholder="手元現金名" required class="flex-1 w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-200"/>
-                            <div class="flex gap-2 w-full sm:w-auto"><input name="walAmount" type="text" placeholder="現在の金額" required class="flex-1 w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-200"/><button type="submit" class="px-4 py-2 bg-amber-500 text-white font-bold rounded-lg hover:bg-amber-600 flex items-center justify-center gap-1 shrink-0 transition-colors">${App.getIconHTML('plus', 18)} 追加</button></div>
+                            <div class="flex gap-2 w-full sm:w-auto">
+                                <input name="walAmount" type="text" placeholder="現在の金額" required class="flex-1 w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-200"/>
+                                <button type="submit" class="px-4 py-2 bg-amber-500 text-white font-bold rounded-lg hover:bg-amber-600 flex items-center justify-center gap-1 shrink-0 transition-colors">${App.getIconHTML('plus', 18)} 追加</button>
+                            </div>
                         </form>
                     </div>
                 </div>`;
@@ -632,46 +714,39 @@
                                 <div class="flex gap-2 mb-2"><input name="name" type="text" value="${escapeHTML(item.name)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="項目名" required/><input name="amount" type="text" value="${escapeHTML(item.amount)}" class="w-24 px-2 py-1 text-sm border rounded" placeholder="金額"/></div>
                                 <div class="flex gap-2 mb-2">
                                     <input name="memo" type="text" value="${escapeHTML(item.memo)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="メモ"/>
-                                    <select name="targetId" class="w-32 px-2 py-1 text-[10px] font-bold border rounded bg-gray-50 text-gray-700"><option value="">入金先(未定)</option><optgroup label="口座">${s.accounts.map(a => `<option value="acc_${a.id}" ${item.targetId === 'acc_'+a.id ? 'selected':''}>${escapeHTML(a.name)}</option>`).join('')}</optgroup><optgroup label="手元現金">${s.wallets.map(w => `<option value="wal_${w.id}" ${item.targetId === 'wal_'+w.id ? 'selected':''}>${escapeHTML(w.name)}</option>`).join('')}</optgroup></select>
+                                    <select name="targetId" class="w-32 px-2 py-1 text-[10px] font-bold border rounded bg-gray-50 text-gray-700">
+                                        <option value="">入金先(未定)</option>
+                                        <optgroup label="口座">${s.accounts.map(a => `<option value="acc_${a.id}" ${item.targetId === 'acc_'+a.id ? 'selected':''}>${escapeHTML(a.name)}</option>`).join('')}</optgroup>
+                                        <optgroup label="手元現金">${s.wallets.map(w => `<option value="wal_${w.id}" ${item.targetId === 'wal_'+w.id ? 'selected':''}>${escapeHTML(w.name)}</option>`).join('')}</optgroup>
+                                    </select>
                                 </div>
                                 <div class="flex justify-between items-center"><label class="text-[11px] font-bold text-emerald-800 flex items-center gap-1"><input name="isFixed" type="checkbox" ${item.isFixed ? 'checked' : ''}/>毎月固定</label><div class="flex gap-2"><button type="button" onclick="App.cancelEdit()" class="px-3 py-1 text-xs border rounded bg-gray-50 font-bold text-gray-600">ｷｬﾝｾﾙ</button><button type="submit" class="px-3 py-1 text-xs text-white bg-emerald-600 rounded font-bold">保存</button></div></div>
                             </form>
                         `;
                     } else {
                         let targetName = '未定';
-                        if (item.targetId) { if (item.targetId.startsWith('acc_')) { const t = s.accounts.find(a => a.id == item.targetId.split('_')[1]); if (t) targetName = '口座: ' + t.name; } if (item.targetId.startsWith('wal_')) { const t = s.wallets.find(w => w.id == item.targetId.split('_')[1]); if (t) targetName = '現金: ' + t.name; } }
+                        if (item.targetId) {
+                            if (item.targetId.startsWith('acc_')) { const t = s.accounts.find(a => a.id == item.targetId.split('_')[1]); if (t) targetName = '口座: ' + t.name; }
+                            if (item.targetId.startsWith('wal_')) { const t = s.wallets.find(w => w.id == item.targetId.split('_')[1]); if (t) targetName = '現金: ' + t.name; }
+                        }
+
                         html += `
-                            <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-100 transition-all ${item.isDone ? 'opacity-40 bg-gray-50' : ''}">
-                                <div class="flex justify-between items-center">
-                                    <div class="flex items-start flex-1 min-w-0 pr-2">
-                                        ${App.renderSortButtons('income', index, index === 0, index === s.incomes.length - 1)}
-                                        <div class="flex-1 min-w-0 pt-0.5">
-                                            <div class="flex items-center gap-2 flex-wrap mb-1"><span class="font-bold text-gray-800 ${item.isDone ? 'line-through text-gray-400' : ''}">${escapeHTML(item.name)}</span>${item.isFixed ? `<span class="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 rounded font-black">固定</span>` : ''}</div>
-                                            <div class="text-[10px] font-bold text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded border inline-block">入金先: ${escapeHTML(targetName)}</div>
-                                            ${item.memo ? `<div class="text-[10px] text-gray-400 mt-1 truncate">${App.getIconHTML('message-square', 10)} ${escapeHTML(item.memo)}</div>` : ''}
-                                        </div>
-                                    </div>
-                                    <div class="flex items-center gap-2 shrink-0">
-                                        ${App.getDisplayAmountHTML(item.amount, item.isDone ? 'text-gray-400' : 'text-gray-800')}
-                                        <button type="button" onclick="App.toggleDone('income', ${item.id})" class="p-1.5 rounded transition-colors ${item.isDone ? 'bg-emerald-100 text-emerald-700' : 'text-gray-300 hover:text-emerald-600 hover:bg-gray-50'}">${App.getIconHTML(item.isDone ? 'check-circle-2' : 'done', 20)}</button>
-                                        <button type="button" onclick="App.startEdit('income', ${item.id})" class="text-gray-300 hover:text-blue-500 p-1">${App.getIconHTML('pencil', 20)}</button>
-                                        <button type="button" onclick="App.requestDelete('income', ${item.id}, '${escapeHTML(item.name)}')" class="text-gray-300 hover:text-red-500 p-1">${App.getIconHTML('trash-2', 20)}</button>
+                            <div class="flex justify-between items-center bg-white p-3 rounded-lg shadow-sm border border-gray-100 transition-all ${item.isDone ? 'opacity-40 bg-gray-50' : ''}">
+                                <div class="flex items-start flex-1 min-w-0 pr-2">
+                                    ${App.renderSortButtons('income', index, index === 0, index === s.incomes.length - 1)}
+                                    <div class="flex-1 min-w-0 pt-0.5">
+                                        <div class="flex items-center gap-2 flex-wrap mb-1"><span class="font-bold text-gray-800 ${item.isDone ? 'line-through text-gray-400' : ''}">${escapeHTML(item.name)}</span>${item.isFixed ? `<span class="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 rounded font-black">固定</span>` : ''}</div>
+                                        <div class="text-[10px] font-bold text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded border inline-block">入金先: ${escapeHTML(targetName)}</div>
+                                        ${item.memo ? `<div class="text-[10px] text-gray-400 mt-1 truncate">${App.getIconHTML('message-square', 10)} ${escapeHTML(item.memo)}</div>` : ''}
+                                        ${(item.autoAllocations && item.autoAllocations.length > 0) ? `<div class="mt-2 space-y-1">${item.autoAllocations.map((a, allocIdx) => `<div onclick="App.openAllocationEditModal(${item.id}, ${allocIdx})" class="cursor-pointer hover:bg-indigo-100 text-[10px] text-indigo-700 bg-indigo-50/80 px-2 py-1.5 rounded border border-indigo-100 flex justify-between items-center shadow-sm transition-colors"><span class="flex items-center gap-1">${App.getIconHTML('trending_flat', 14, 'text-indigo-400')} ${escapeHTML(a.name)} へ</span><span class="font-bold flex items-center gap-1">${App.formatCurrency(a.amount)} ${App.getIconHTML('pencil', 12, 'text-indigo-400')}</span></div>`).join('')}</div>` : ''}
                                     </div>
                                 </div>
-                                ${(item.autoAllocations && item.autoAllocations.length > 0) ? `
-                                <div class="mt-3 pt-2 border-t border-gray-100">
-                                    <div class="text-[10px] font-bold text-indigo-500 mb-1.5 flex items-center gap-1">${App.getIconHTML('auto_awesome', 12)} 資金の振り分け指示</div>
-                                    <div class="flex flex-wrap gap-2">
-                                        ${item.autoAllocations.map((a, allocIdx) => `
-                                            <div onclick="App.openAllocationEditModal(${item.id}, ${allocIdx})" class="cursor-pointer hover:bg-indigo-100 transition-colors text-[11px] text-indigo-800 bg-indigo-50 px-2 py-1 rounded-md border border-indigo-200 flex items-center gap-1.5 shadow-sm whitespace-nowrap">
-                                                <span>${escapeHTML(a.name)}</span>
-                                                ${App.getIconHTML('trending_flat', 12, 'text-indigo-400')}
-                                                <span class="font-bold flex items-center gap-1">${App.formatCurrency(a.amount)} ${App.getIconHTML('pencil', 12, 'text-indigo-400')}</span>
-                                            </div>
-                                        `).join('')}
-                                    </div>
+                                <div class="flex items-center gap-2 shrink-0">
+                                    ${App.getDisplayAmountHTML(item.amount, item.isDone ? 'text-gray-400' : 'text-gray-800')}
+                                    <button type="button" onclick="App.toggleDone('income', ${item.id})" class="p-1.5 rounded transition-colors ${item.isDone ? 'bg-emerald-100 text-emerald-700' : 'text-gray-300 hover:text-emerald-600 hover:bg-gray-50'}">${App.getIconHTML(item.isDone ? 'check-circle-2' : 'done', 20)}</button>
+                                    <button type="button" onclick="App.startEdit('income', ${item.id})" class="text-gray-300 hover:text-blue-500 p-1">${App.getIconHTML('pencil', 20)}</button>
+                                    <button type="button" onclick="App.requestDelete('income', ${item.id}, '${escapeHTML(item.name)}')" class="text-gray-300 hover:text-red-500 p-1">${App.getIconHTML('trash-2', 20)}</button>
                                 </div>
-                                ` : ''}
                             </div>
                         `;
                     }
@@ -679,8 +754,19 @@
                 html += `
                         </div>
                         <form onsubmit="App.addIncome(event, this)" class="bg-white p-4 rounded-xl border shadow-sm space-y-3">
-                            <div class="flex flex-col sm:flex-row gap-2"><input name="incName" type="text" placeholder="入金項目名" required class="flex-1 px-3 py-2 text-sm border-lg focus:ring-2 focus:ring-emerald-300"/><input name="incAmount" type="text" placeholder="金額 (数式OK)" required class="w-full sm:w-32 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-emerald-300"/></div>
-                            <div class="flex flex-col sm:flex-row gap-2 items-center"><select name="incTarget" class="w-full sm:w-auto flex-1 px-2 py-2 text-sm font-bold border rounded-lg bg-gray-50 text-gray-700"><option value="">入金先を選択 (未定)</option><optgroup label="口座">${s.accounts.map(a => `<option value="acc_${a.id}">${escapeHTML(a.name)}</option>`).join('')}</optgroup><optgroup label="手元現金">${s.wallets.map(w => `<option value="wal_${w.id}">${escapeHTML(w.name)}</option>`).join('')}</optgroup></select><input name="incMemo" type="text" placeholder="メモ" class="flex-1 w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-emerald-300"/><button type="submit" class="w-full sm:w-auto px-6 py-2 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700">追加</button></div>
+                            <div class="flex flex-col sm:flex-row gap-2">
+                                <input name="incName" type="text" placeholder="入金項目名" required class="flex-1 px-3 py-2 text-sm border-lg focus:ring-2 focus:ring-emerald-300"/>
+                                <input name="incAmount" type="text" placeholder="金額 (数式OK)" required class="w-full sm:w-32 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-emerald-300"/>
+                            </div>
+                            <div class="flex flex-col sm:flex-row gap-2 items-center">
+                                <select name="incTarget" class="w-full sm:w-auto flex-1 px-2 py-2 text-sm font-bold border rounded-lg bg-gray-50 text-gray-700">
+                                    <option value="">入金先を選択 (未定)</option>
+                                    <optgroup label="口座">${s.accounts.map(a => `<option value="acc_${a.id}">${escapeHTML(a.name)}</option>`).join('')}</optgroup>
+                                    <optgroup label="手元現金">${s.wallets.map(w => `<option value="wal_${w.id}">${escapeHTML(w.name)}</option>`).join('')}</optgroup>
+                                </select>
+                                <input name="incMemo" type="text" placeholder="メモ" class="flex-1 w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-emerald-300"/>
+                                <button type="submit" class="w-full sm:w-auto px-6 py-2 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 shrink-0">追加</button>
+                            </div>
                             <label class="flex items-center gap-2 text-xs font-bold text-gray-600"><input name="incIsFixed" type="checkbox" class="rounded text-emerald-600 w-4 h-4"/>毎月固定の予定にする</label>
                         </form>
                     </div>
@@ -690,33 +776,136 @@
 
             renderPayments: function() {
                 const s = App.state;
-                let html = `<div class="animate-fade-in max-w-4xl mx-auto space-y-4"><div class="grid grid-cols-2 md:grid-cols-4 gap-3">`;
-                Object.entries(CAT_LABELS).forEach(([key, data]) => { html += `<div class="${data.bg} border ${data.border} rounded-xl p-3 flex flex-col items-center text-center"><span class="text-[10px] font-bold ${data.color} flex items-center gap-1 mb-1">${App.getIconHTML(data.icon, 14)}${data.label}</span><span class="font-black text-lg ${data.color}">${App.formatCurrency(App.totals.catTotals[key])}</span></div>`; });
-                html += `</div><div class="rounded-2xl p-5 shadow-sm border bg-rose-50/50 border-rose-100"><div class="flex items-center justify-between mb-4"><h3 class="text-lg font-bold flex items-center gap-2 text-rose-600">${App.getIconHTML('arrow-up-from-line', 24)}支払い・ローン予定</h3><span class="font-bold text-lg text-rose-700">未済合計: ${App.formatCurrency(App.totals.activePayments)}</span></div><div class="space-y-3 mb-6">`;
+                let html = `<div class="animate-fade-in max-w-4xl mx-auto space-y-4">`;
+                
+                html += `<div class="grid grid-cols-2 md:grid-cols-4 gap-3">`;
+                Object.entries(CAT_LABELS).forEach(([key, data]) => {
+                    html += `
+                        <div class="${data.bg} border ${data.border} rounded-xl p-3 flex flex-col items-center text-center">
+                            <span class="text-[10px] font-bold ${data.color} flex items-center gap-1 mb-1">${App.getIconHTML(data.icon, 14)}${data.label}</span>
+                            <span class="font-black text-lg ${data.color}">${App.formatCurrency(App.totals.catTotals[key])}</span>
+                        </div>
+                    `;
+                });
+                html += `</div>`;
+
+                html += `
+                    <div class="rounded-2xl p-5 shadow-sm border bg-rose-50/50 border-rose-100">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-bold flex items-center gap-2 text-rose-600">${App.getIconHTML('arrow-up-from-line', 24)}支払い・ローン予定</h3>
+                            <span class="font-bold text-lg text-rose-700">未済合計: ${App.formatCurrency(App.totals.activePayments)}</span>
+                        </div>
+                        <div class="space-y-3 mb-6">
+                `;
 
                 s.payments.forEach((item, index) => {
                     if (s.editMode && s.editMode.type === 'payment' && s.editMode.id === item.id) {
-                        html += `<form onsubmit="App.saveEdit(event, 'payment', ${item.id})" class="bg-rose-50/80 rounded-xl shadow-inner border border-rose-200 p-4 space-y-3"><div class="flex gap-2"><input name="name" type="text" value="${escapeHTML(item.name)}" class="flex-1 px-3 py-2 text-sm border rounded focus:ring-1 focus:ring-rose-300" placeholder="項目名" required/><input name="amount" type="text" value="${escapeHTML(item.amount)}" class="w-28 px-3 py-2 text-sm border rounded focus:ring-1 focus:ring-rose-300" placeholder="請求総額"/></div><div class="flex gap-2">${App.renderCategorySelectLg('category', item.category)}${App.renderAccountSelect('accountId', item.accountId)}<input name="dueDate" type="number" min="1" max="31" value="${item.dueDate||''}" class="w-16 px-2 py-2 text-sm border rounded bg-white" placeholder="日"/></div><div class="flex gap-2 items-center"><input name="memo" type="text" value="${escapeHTML(item.memo)}" class="flex-1 px-3 py-2 text-sm border rounded" placeholder="メモ"/><div class="flex items-center gap-1 border bg-white rounded px-2"><span class="text-[10px] font-bold text-gray-500 whitespace-nowrap">終了月:</span><input name="endDate" type="month" value="${item.endDate||''}" class="w-28 py-2 text-[10px] outline-none" /></div></div><div class="flex justify-end gap-2"><button type="button" onclick="App.cancelEdit()" class="px-4 py-2 text-sm bg-gray-50 border rounded font-bold text-gray-600">キャンセル</button><button type="submit" class="px-4 py-2 text-sm bg-rose-500 text-white font-bold rounded">保存</button></div></form>`;
+                        html += `
+                            <form onsubmit="App.saveEdit(event, 'payment', ${item.id})" class="bg-rose-50/80 rounded-xl shadow-inner border border-rose-200 p-4 space-y-3">
+                                <div class="flex gap-2"><input name="name" type="text" value="${escapeHTML(item.name)}" class="flex-1 px-3 py-2 text-sm border rounded focus:ring-1 focus:ring-rose-300" placeholder="項目名" required/><input name="amount" type="text" value="${escapeHTML(item.amount)}" class="w-28 px-3 py-2 text-sm border rounded focus:ring-1 focus:ring-rose-300" placeholder="請求総額"/></div>
+                                <div class="flex gap-2">
+                                    ${App.renderCategorySelectLg('category', item.category)}
+                                    ${App.renderAccountSelect('accountId', item.accountId)}
+                                    <input name="dueDate" type="number" min="1" max="31" value="${item.dueDate||''}" class="w-16 px-2 py-2 text-sm border rounded bg-white" placeholder="日"/>
+                                </div>
+                                <div class="flex gap-2 items-center">
+                                    <input name="memo" type="text" value="${escapeHTML(item.memo)}" class="flex-1 px-3 py-2 text-sm border rounded" placeholder="メモ"/>
+                                    <div class="flex items-center gap-1 border bg-white rounded px-2"><span class="text-[10px] font-bold text-gray-500 whitespace-nowrap">終了月:</span><input name="endDate" type="month" value="${item.endDate||''}" class="w-28 py-2 text-[10px] outline-none" /></div>
+                                </div>
+                                <div class="flex justify-end gap-2"><button type="button" onclick="App.cancelEdit()" class="px-4 py-2 text-sm bg-gray-50 border rounded font-bold text-gray-600">キャンセル</button><button type="submit" class="px-4 py-2 text-sm bg-rose-500 text-white font-bold rounded">保存</button></div>
+                            </form>
+                        `;
                     } else {
-                        const isExpanded = s.expandedPayIds.has(item.id); const linkedAccount = s.accounts.find(a => a.id === item.accountId); const itemCat = CAT_LABELS[item.category] || SAFE_CAT;
+                        const isExpanded = s.expandedPayIds.has(item.id);
+                        const linkedAccount = s.accounts.find(a => a.id === item.accountId);
+                        const itemCat = CAT_LABELS[item.category] || SAFE_CAT;
+                        
                         const endDateBadge = item.endDate ? `<span class="border border-rose-300 bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded flex items-center gap-1 shadow-sm"><span class="material-symbols-outlined text-[12px]">calendar_month</span>${item.endDate.replace('-','年')}月まで</span>` : '';
-                        html += `<div class="bg-white rounded-lg shadow-sm border border-gray-100 transition-all ${item.isDone ? 'opacity-40 bg-gray-50' : ''}"><div class="p-3 flex justify-between items-center"><div class="flex items-start flex-1 min-w-0 pr-2"><div class="mt-1">${App.renderSortButtons('payment', index, index === 0, index === s.payments.length - 1)}</div><button type="button" onclick="App.toggleExpand(${item.id})" class="text-gray-400 p-1 mr-2 mt-0.5 bg-gray-50 rounded border transition-colors hover:text-gray-700">${App.getIconHTML(isExpanded ? 'chevron-up' : 'chevron-down', 20)}</button><div class="min-w-0 pr-2"><div class="flex items-center gap-2 flex-wrap mb-1"><span class="font-bold text-gray-800 ${item.isDone ? 'line-through' : ''}">${escapeHTML(item.name)}</span><span class="text-[9px] px-1.5 py-0.5 rounded font-bold ${itemCat.bg} ${itemCat.color}">${itemCat.label}</span></div><div class="flex flex-wrap items-center gap-2 text-[10px] text-gray-500 mt-1.5">${endDateBadge}${item.dueDate ? `<span class="bg-gray-50 border px-1.5 py-0.5 rounded flex items-center gap-1">${App.getIconHTML('calendar', 12, 'text-rose-400')} ${item.dueDate}日引落</span>` : ''}${linkedAccount ? `<span class="bg-blue-50 text-blue-700 border border-blue-100 px-1.5 py-0.5 rounded flex items-center gap-1 max-w-[100px] truncate">${App.getIconHTML('building-2', 12, 'shrink-0')}<span class="truncate">${escapeHTML(linkedAccount.name)}</span></span>` : '<span class="text-gray-400">口座未設定</span>'}</div>${item.memo ? `<div class="text-[10px] text-gray-400 mt-1 flex items-start gap-1">${App.getIconHTML('message-square', 14, 'shrink-0 mt-0.5')} <span class="truncate">${escapeHTML(item.memo)}</span></div>` : ''}</div></div><div class="flex flex-col items-end gap-2 shrink-0">${App.getDisplayAmountHTML(item.amount, `text-[15px] ${item.isDone ? 'text-gray-400' : 'text-gray-800'}`)}<div class="flex gap-1"><button type="button" onclick="App.toggleDone('payment', ${item.id})" class="p-1.5 rounded transition-colors ${item.isDone ? 'bg-rose-100 text-rose-700' : 'text-gray-300 hover:text-rose-600 hover:bg-rose-50'}">${App.getIconHTML(item.isDone ? 'check-circle-2' : 'done', 20)}</button><button type="button" onclick="App.startEdit('payment', ${item.id})" class="text-gray-400 hover:text-blue-500 p-1.5">${App.getIconHTML('pencil', 20)}</button><button type="button" onclick="App.requestDelete('payment', ${item.id}, '${escapeHTML(item.name)}')" class="text-gray-400 hover:text-red-500 p-1.5">${App.getIconHTML('trash-2', 20)}</button></div></div></div>`;
+
+                        html += `
+                            <div class="bg-white rounded-lg shadow-sm border border-gray-100 transition-all ${item.isDone ? 'opacity-40 bg-gray-50' : ''}">
+                                <div class="p-3 flex justify-between items-center">
+                                    <div class="flex items-start flex-1 min-w-0 pr-2">
+                                        <div class="mt-1">${App.renderSortButtons('payment', index, index === 0, index === s.payments.length - 1)}</div>
+                                        <button type="button" onclick="App.toggleExpand(${item.id})" class="shrink-0 text-gray-400 p-1 mr-2 mt-0.5 bg-gray-50 rounded border transition-colors hover:text-gray-700">${App.getIconHTML(isExpanded ? 'chevron-up' : 'chevron-down', 20)}</button>
+                                        <div class="min-w-0 pr-2">
+                                            <div class="flex items-center gap-2 flex-wrap mb-1">
+                                                <span class="font-bold text-gray-800 ${item.isDone ? 'line-through' : ''}">${escapeHTML(item.name)}</span>
+                                                <span class="text-[9px] px-1.5 py-0.5 rounded font-bold ${itemCat.bg} ${itemCat.color}">${itemCat.label}</span>
+                                            </div>
+                                            <div class="flex flex-wrap items-center gap-2 text-[10px] text-gray-500 mt-1.5">
+                                                ${endDateBadge}
+                                                ${item.dueDate ? `<span class="bg-gray-50 border px-1.5 py-0.5 rounded flex items-center gap-1">${App.getIconHTML('calendar', 12, 'text-rose-400')} ${item.dueDate}日引落</span>` : ''}
+                                                ${linkedAccount ? `<span class="bg-blue-50 text-blue-700 border border-blue-100 px-1.5 py-0.5 rounded flex items-center gap-1 max-w-[100px] truncate">${App.getIconHTML('building-2', 12, 'shrink-0')}<span class="truncate">${escapeHTML(linkedAccount.name)}</span></span>` : '<span class="text-gray-400">口座未設定</span>'}
+                                            </div>
+                                            ${item.memo ? `<div class="text-[10px] text-gray-400 mt-1 flex items-start gap-1">${App.getIconHTML('message-square', 14, 'shrink-0 mt-0.5')} <span class="truncate">${escapeHTML(item.memo)}</span></div>` : ''}
+                                        </div>
+                                    </div>
+                                    <div class="flex flex-col items-end gap-2 shrink-0">
+                                        ${App.getDisplayAmountHTML(item.amount, `text-[15px] ${item.isDone ? 'text-gray-400' : 'text-gray-800'}`)}
+                                        <div class="flex gap-1">
+                                            <button type="button" onclick="App.toggleDone('payment', ${item.id})" class="p-1.5 rounded transition-colors ${item.isDone ? 'bg-rose-100 text-rose-700' : 'text-gray-300 hover:text-rose-600 hover:bg-rose-50'}">${App.getIconHTML(item.isDone ? 'check-circle-2' : 'done', 20)}</button>
+                                            <button type="button" onclick="App.startEdit('payment', ${item.id})" class="text-gray-400 hover:text-blue-500 p-1.5">${App.getIconHTML('pencil', 20)}</button>
+                                            <button type="button" onclick="App.requestDelete('payment', ${item.id}, '${escapeHTML(item.name)}')" class="text-gray-400 hover:text-red-500 p-1.5">${App.getIconHTML('trash-2', 20)}</button>
+                                        </div>
+                                    </div>
+                                </div>
+                        `;
+
                         if (isExpanded) {
-                            html += `<div class="px-4 py-3 bg-gray-50 border-t flex flex-col gap-3"><div class="text-sm text-gray-600 flex items-center gap-1">${App.getIconHTML('info', 16, 'text-indigo-400')}<span><strong>引落先:</strong> ${linkedAccount ? escapeHTML(linkedAccount.name) : '設定されていません'}</span></div><div class="bg-white rounded-lg border border-gray-200 p-3 shadow-sm"><h4 class="font-bold text-gray-700 text-[13px] mb-2 border-b border-gray-100 pb-1.5">明細内訳（カード内の分類など）</h4>`;
+                            html += `
+                                <div class="px-4 py-3 bg-gray-50 border-t flex flex-col gap-3">
+                                    <div class="text-sm text-gray-600 flex items-center gap-1">${App.getIconHTML('info', 16, 'text-indigo-400')}<span><strong>引落先:</strong> ${linkedAccount ? escapeHTML(linkedAccount.name) : '設定されていません'}</span></div>
+                                    <div class="bg-white rounded-lg border border-gray-200 p-3 shadow-sm">
+                                        <h4 class="font-bold text-gray-700 text-[13px] mb-2 border-b border-gray-100 pb-1.5">明細内訳（カード内の分類など）</h4>
+                            `;
                             if (item.subItems && item.subItems.length > 0) {
                                 html += `<ul class="space-y-3 mb-3">`;
                                 item.subItems.forEach(sub => {
                                     if (s.editMode && s.editMode.type === 'subItem' && s.editMode.id === sub.id) {
-                                        html += `<form onsubmit="App.saveEdit(event, 'subItem', ${sub.id}, ${item.id})" class="bg-indigo-50/80 p-3 rounded-lg border flex flex-col gap-2 shadow-inner"><div class="flex gap-2"><input name="name" type="text" value="${escapeHTML(sub.name)}" class="flex-1 px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-indigo-300" placeholder="内訳名" required/><input name="amount" type="text" value="${escapeHTML(sub.amount)}" class="w-20 px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-indigo-300" placeholder="金額"/></div><div class="flex gap-2">${App.renderCategorySelect('category', sub.category)}<input name="memo" type="text" value="${escapeHTML(sub.memo)}" class="flex-1 px-2 py-1 text-xs border rounded" placeholder="メモ"/></div><div class="flex justify-end gap-1"><button type="button" onclick="App.cancelEdit()" class="px-2 py-1 text-[10px] bg-white border rounded font-bold text-gray-600">ｷｬﾝｾﾙ</button><button type="submit" class="px-2 py-1 text-[10px] text-white bg-indigo-600 rounded font-bold">保存</button></div></form>`;
+                                        html += `
+                                            <form onsubmit="App.saveEdit(event, 'subItem', ${sub.id}, ${item.id})" class="bg-indigo-50/80 p-3 rounded-lg border flex flex-col gap-2 shadow-inner">
+                                                <div class="flex gap-2"><input name="name" type="text" value="${escapeHTML(sub.name)}" class="flex-1 px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-indigo-300" placeholder="内訳名" required/><input name="amount" type="text" value="${escapeHTML(sub.amount)}" class="w-20 px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-indigo-300" placeholder="金額"/></div>
+                                                <div class="flex gap-2">${App.renderCategorySelect('category', sub.category)}<input name="memo" type="text" value="${escapeHTML(sub.memo)}" class="flex-1 px-2 py-1 text-xs border rounded" placeholder="メモ"/></div>
+                                                <div class="flex justify-end gap-1"><button type="button" onclick="App.cancelEdit()" class="px-2 py-1 text-[10px] bg-white border rounded font-bold text-gray-600">ｷｬﾝｾﾙ</button><button type="submit" class="px-2 py-1 text-[10px] text-white bg-indigo-600 rounded font-bold">保存</button></div>
+                                            </form>
+                                        `;
                                     } else {
                                         const subCat = CAT_LABELS[sub.category] || SAFE_CAT;
-                                        html += `<li class="flex justify-between items-start text-sm border-b pb-2 last:border-0 last:pb-0"><div class="flex flex-col gap-1 flex-1 min-w-0"><div class="flex items-center gap-2"><span class="text-gray-800 font-medium">${escapeHTML(sub.name)}</span><span class="text-[9px] px-1.5 rounded font-bold ${subCat.bg} ${subCat.color}">${subCat.label}</span></div>${sub.memo ? `<span class="text-[10px] text-gray-400 truncate">${escapeHTML(sub.memo)}</span>` : ''}</div><div class="flex items-center gap-1.5 shrink-0">${App.getDisplayAmountHTML(sub.amount, "text-sm text-gray-700")}<button type="button" onclick="App.startEdit('subItem', ${sub.id})" class="text-gray-300 hover:text-blue-500">${App.getIconHTML('pencil', 14)}</button><button type="button" onclick="App.executeDeleteSubItem(${item.id}, ${sub.id})" class="text-gray-300 hover:text-red-500">${App.getIconHTML('trash-2', 14)}</button></div></li>`;
+                                        html += `
+                                            <li class="flex justify-between items-start text-sm border-b pb-2 last:border-0 last:pb-0">
+                                                <div class="flex flex-col gap-1 flex-1 min-w-0">
+                                                    <div class="flex items-center gap-2"><span class="text-gray-800 font-medium">${escapeHTML(sub.name)}</span><span class="text-[9px] px-1.5 rounded font-bold ${subCat.bg} ${subCat.color}">${subCat.label}</span></div>
+                                                    ${sub.memo ? `<span class="text-[10px] text-gray-400 truncate">${escapeHTML(sub.memo)}</span>` : ''}
+                                                </div>
+                                                <div class="flex items-center gap-1.5 shrink-0">${App.getDisplayAmountHTML(sub.amount, "text-sm text-gray-700")}<button type="button" onclick="App.startEdit('subItem', ${sub.id})" class="text-gray-300 hover:text-blue-500">${App.getIconHTML('pencil', 14)}</button><button type="button" onclick="App.executeDeleteSubItem(${item.id}, ${sub.id})" class="text-gray-300 hover:text-red-500">${App.getIconHTML('trash-2', 14)}</button></div>
+                                            </li>
+                                        `;
                                     }
                                 });
                                 html += `</ul>`;
-                            } else { html += `<p class="text-xs text-gray-400 text-center py-2">内訳は未登録です</p>`; }
-                            const subTotal = (item.subItems||[]).reduce((sum, sub) => sum + App.calcAmount(sub.amount), 0); const diff = App.calcAmount(item.amount) - subTotal;
-                            html += `<div class="flex justify-between items-center border-t pt-2 text-xs"><span class="text-gray-500 font-bold">基本カテゴリ分 (${itemCat.label})</span><span class="font-bold ${diff < 0 ? 'text-red-500' : 'text-gray-700'}">${App.formatCurrency(diff)}</span></div></div><form onsubmit="App.addSubItem(event, this, ${item.id})" class="bg-white p-3 rounded-lg border flex flex-col gap-2"><div class="flex gap-2"><input name="subName" type="text" placeholder="内訳名" required class="flex-1 px-2 py-1.5 text-xs border rounded focus:ring-1 focus:ring-indigo-300"/><input name="subAmount" type="text" placeholder="金額 (数式OK)" class="w-24 px-2 py-1.5 text-xs border rounded focus:ring-1 focus:ring-indigo-300"/></div><div class="flex gap-2 items-center"><select name="subCat" class="w-24 px-1 py-1.5 text-[10px] font-bold border rounded bg-gray-50 text-gray-700">${Object.entries(CAT_LABELS).map(([k,d])=>`<option value="${k}">${d.label}</option>`).join('')}</select><input name="subMemo" type="text" placeholder="メモ" class="flex-1 px-2 py-1.5 text-xs border rounded bg-gray-50"/><button type="submit" class="px-3 py-1.5 bg-gray-800 text-white text-xs font-bold rounded">追加</button></div></form></div>`;
+                            } else {
+                                html += `<p class="text-xs text-gray-400 text-center py-2">内訳は未登録です</p>`;
+                            }
+                            
+                            const subTotal = (item.subItems||[]).reduce((sum, sub) => sum + App.calcAmount(sub.amount), 0);
+                            const diff = App.calcAmount(item.amount) - subTotal;
+                            html += `
+                                        <div class="flex justify-between items-center border-t pt-2 text-xs">
+                                            <span class="text-gray-500 font-bold">基本カテゴリ分 (${itemCat.label})</span>
+                                            <span class="font-bold ${diff < 0 ? 'text-red-500' : 'text-gray-700'}">${App.formatCurrency(diff)}</span>
+                                        </div>
+                                    </div>
+                                    <form onsubmit="App.addSubItem(event, this, ${item.id})" class="bg-white p-3 rounded-lg border flex flex-col gap-2">
+                                        <div class="flex gap-2"><input name="subName" type="text" placeholder="内訳名" required class="flex-1 px-2 py-1.5 text-xs border rounded focus:ring-1 focus:ring-indigo-300"/><input name="subAmount" type="text" placeholder="金額 (数式OK)" class="w-24 px-2 py-1.5 text-xs border rounded focus:ring-1 focus:ring-indigo-300"/></div>
+                                        <div class="flex gap-2 items-center">
+                                            <select name="subCat" class="w-24 px-1 py-1.5 text-[10px] font-bold border rounded bg-gray-50 text-gray-700">${Object.entries(CAT_LABELS).map(([k,d])=>`<option value="${k}">${d.label}</option>`).join('')}</select>
+                                            <input name="subMemo" type="text" placeholder="メモ" class="flex-1 px-2 py-1.5 text-xs border rounded bg-gray-50"/>
+                                            <button type="submit" class="shrink-0 px-3 py-1.5 bg-gray-800 text-white text-xs font-bold rounded">追加</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            `;
                         }
                         html += `</div>`;
                     }
@@ -726,9 +915,20 @@
                         </div>
                         <form onsubmit="App.addPayment(event, this)" class="bg-white p-4 rounded-xl border shadow-sm flex flex-col gap-3">
                             <p class="text-sm font-bold text-gray-700 flex items-center gap-1">${App.getIconHTML('plus', 16, 'text-rose-500')} 新しい支払いを追加</p>
-                            <div class="flex flex-col sm:flex-row gap-3"><input name="payName" type="text" placeholder="項目名 (例: 楽天カード)" required class="flex-1 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-rose-200 outline-none w-full"/><input name="payAmount" type="text" placeholder="請求総額 (数式OK)" required class="flex-1 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-rose-200 outline-none w-full sm:max-w-[150px]"/></div>
-                            <div class="bg-gray-50 p-3 rounded-lg space-y-3"><div class="flex flex-col sm:flex-row gap-3 text-sm"><label class="flex items-center gap-2 flex-1 w-full"><span class="text-gray-600 font-medium w-16 shrink-0">引落口座</span><select name="payAccountId" class="flex-1 px-2 py-1.5 border rounded-md bg-white w-full"><option value="">(未設定)</option>${s.accounts.map(a=>`<option value="${a.id}">${escapeHTML(a.name)}</option>`).join('')}</select></label><label class="flex items-center gap-2 sm:w-auto w-full"><span class="text-gray-600 font-medium shrink-0 sm:w-auto w-16">引落日</span><input name="payDueDate" type="number" min="1" max="31" placeholder="日" class="flex-1 sm:w-20 px-2 py-1.5 border rounded-md bg-white"/></label></div></div>
-                            <div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center"><input name="payMemo" type="text" placeholder="メモ（任意）" class="flex-1 px-3 py-2 text-sm border rounded-lg bg-gray-50 w-full"/><div class="flex items-center gap-1 border bg-white rounded-lg px-2 py-1 w-full sm:w-auto"><span class="text-[10px] font-bold text-gray-500 whitespace-nowrap">終了月:</span><input name="payEndDate" type="month" class="w-full sm:w-32 py-1 text-sm outline-none" /></div></div>
+                            <div class="flex flex-col sm:flex-row gap-3">
+                                <input name="payName" type="text" placeholder="項目名 (例: 楽天カード)" required class="flex-1 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-rose-200 outline-none w-full"/>
+                                <input name="payAmount" type="text" placeholder="請求総額 (数式OK)" required class="flex-1 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-rose-200 outline-none w-full sm:max-w-[150px]"/>
+                            </div>
+                            <div class="bg-gray-50 p-3 rounded-lg space-y-3">
+                                <div class="flex flex-col sm:flex-row gap-3 text-sm">
+                                    <label class="flex items-center gap-2 flex-1 w-full"><span class="text-gray-600 font-medium w-16 shrink-0">引落口座</span><select name="payAccountId" class="flex-1 px-2 py-1.5 border rounded-md bg-white w-full"><option value="">(未設定)</option>${s.accounts.map(a=>`<option value="${a.id}">${escapeHTML(a.name)}</option>`).join('')}</select></label>
+                                    <label class="flex items-center gap-2 sm:w-auto w-full"><span class="text-gray-600 font-medium shrink-0 sm:w-auto w-16">引落日</span><input name="payDueDate" type="number" min="1" max="31" placeholder="日" class="flex-1 sm:w-20 px-2 py-1.5 border rounded-md bg-white"/></label>
+                                </div>
+                            </div>
+                            <div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
+                                <input name="payMemo" type="text" placeholder="メモ（任意）" class="flex-1 px-3 py-2 text-sm border rounded-lg bg-gray-50 w-full"/>
+                                <div class="flex items-center gap-1 border bg-white rounded-lg px-2 py-1 w-full sm:w-auto"><span class="text-[10px] font-bold text-gray-500 whitespace-nowrap">終了月:</span><input name="payEndDate" type="month" class="w-full sm:w-32 py-1 text-sm outline-none" /></div>
+                            </div>
                             <button type="submit" class="w-full flex justify-center items-center gap-1 py-2.5 text-white font-bold rounded-lg bg-rose-500 hover:bg-rose-600 shadow-sm transition-colors">追加する</button>
                         </form>
                     </div>
@@ -736,28 +936,75 @@
                 return html;
             },
 
+            renderCashflow: function() {
+                const tot = App.totals; const isShort = tot.activeFinalBalance < 0;
+                return `
+                    <div class="bg-white rounded-2xl p-8 shadow-md border border-gray-100 animate-zoom-in max-w-5xl mx-auto">
+                        <h2 class="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2 pb-4 border-b border-gray-100">${App.getIconHTML('layout-dashboard', 24, 'text-indigo-600')} 今月の全体キャッシュフロー予想</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div class="p-6 bg-blue-50 rounded-2xl border border-blue-100 flex flex-col justify-between"><div><p class="text-sm text-blue-600 font-bold mb-1">確保している資金</p><p class="text-xs text-blue-400 mb-4">全口座・現金 ＋ 未済の入金総額</p></div><p class="text-3xl font-black text-blue-800">${App.formatCurrency(tot.totalAccountsNum + tot.totalWalletsNum + tot.activeAccountIncomes + tot.remainingIncomes)}</p></div>
+                            <div class="p-6 bg-rose-50 rounded-2xl border border-rose-100 flex flex-col justify-between"><div><p class="text-sm text-rose-600 font-bold mb-1">残りの支払い合計</p><p class="text-xs text-rose-400 mb-4">未済引落・消費 ＋ 当月の特別支出</p></div><p class="text-3xl font-black text-rose-800">${App.formatCurrency(tot.activePayments + tot.activeWalletsOutgo)}</p></div>
+                            <div class="p-6 rounded-2xl border-2 flex flex-col justify-between ${isShort ? 'bg-red-50 border-red-300 shadow-sm' : 'bg-emerald-50 border-emerald-300 shadow-emerald-100 shadow-lg'}"><div><p class="text-sm font-bold flex items-center gap-1.5 mb-1 ${isShort ? 'text-red-600' : 'text-emerald-700'}">${App.getIconHTML(isShort ? 'alert-circle' : 'check-circle-2', 24)} 差引予測残高</p><p class="text-xs mb-4 ${isShort ? 'text-red-400' : 'text-emerald-500'}">${isShort ? '資金がショートするリスクがあります' : '引き落とし後も資金は確保できています'}</p></div><p class="text-4xl font-black tracking-tight ${isShort ? 'text-red-700' : 'text-emerald-700'}">${App.formatCurrency(tot.activeFinalBalance)}</p></div>
+                        </div>
+                        ${tot.currentMonthSpecialAmt > 0 ? `<p class="mt-6 text-sm font-bold text-indigo-600 bg-indigo-50 p-3 rounded-lg border border-indigo-100 text-center">💡 今月は特別支出（${App.formatCurrency(tot.currentMonthSpecialAmt)}）があるため、支払いに合算されています。</p>` : ''}
+                    </div>
+                `;
+            },
+
             renderSpecialPayments: function() {
                 const s = App.state; const tot = App.totals;
                 let html = `
                     <div class="space-y-6 animate-fade-in max-w-4xl mx-auto">
-                        <div class="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-6 shadow-sm border border-indigo-100"><h2 class="text-xl font-bold text-indigo-900 mb-2 flex items-center gap-2">${App.getIconHTML('savings', 28)} 特別支出・税金の積立状況</h2><p class="text-sm text-indigo-700 mb-6">固定資産税や車検など、先の大きな支払いに向けて手元現金が足りているかを確認します。</p><div class="bg-white rounded-xl p-5 shadow-sm border border-white/50"><div class="flex justify-between items-end mb-2"><div class="text-gray-600 font-bold text-sm">現在の「手元現金」合計</div><div class="text-2xl font-black ${tot.totalWalletsNum >= tot.totalSpecialAmt ? 'text-emerald-600' : 'text-amber-600'}">${App.formatCurrency(tot.totalWalletsNum)}</div></div><div class="w-full bg-gray-200 rounded-full h-3 mb-2 overflow-hidden flex"><div class="bg-indigo-500 h-3 rounded-full transition-all duration-1000" style="width: ${Math.min((tot.totalWalletsNum / (tot.totalSpecialAmt || 1)) * 100, 100)}%"></div></div><div class="flex justify-between text-xs font-bold text-gray-500"><span>目標(特別支出総額): ${App.formatCurrency(tot.totalSpecialAmt)}</span><span>毎月の必要積立額: <span class="text-rose-500">${App.formatCurrency(tot.totalMonthlyRequired)} /月</span></span></div></div></div>
+                        <div class="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-6 shadow-sm border border-indigo-100">
+                            <h2 class="text-xl font-bold text-indigo-900 mb-2 flex items-center gap-2">${App.getIconHTML('savings', 28)} 特別支出・税金の積立状況</h2>
+                            <p class="text-sm text-indigo-700 mb-6">固定資産税や車検など、先の大きな支払いに向けて手元現金が足りているかを確認します。</p>
+                            <div class="bg-white rounded-xl p-5 shadow-sm border border-white/50">
+                                <div class="flex justify-between items-end mb-2"><div class="text-gray-600 font-bold text-sm">現在の「手元現金」合計</div><div class="text-2xl font-black ${tot.totalWalletsNum >= tot.totalSpecialAmt ? 'text-emerald-600' : 'text-amber-600'}">${App.formatCurrency(tot.totalWalletsNum)}</div></div>
+                                <div class="w-full bg-gray-200 rounded-full h-3 mb-2 overflow-hidden flex"><div class="bg-indigo-500 h-3 rounded-full transition-all duration-1000" style="width: ${Math.min((tot.totalWalletsNum / (tot.totalSpecialAmt || 1)) * 100, 100)}%"></div></div>
+                                <div class="flex justify-between text-xs font-bold text-gray-500"><span>目標(特別支出総額): ${App.formatCurrency(tot.totalSpecialAmt)}</span><span>毎月の必要積立額: <span class="text-rose-500">${App.formatCurrency(tot.totalMonthlyRequired)} /月</span></span></div>
+                            </div>
+                        </div>
                         <div class="bg-white rounded-2xl p-5 shadow-sm border border-gray-100"><h3 class="font-bold text-gray-700 mb-4 border-b pb-2">特別支出リスト</h3><div class="space-y-3 mb-6">
                 `;
+                
                 if (s.specialPayments.length === 0) { html += `<p class="text-sm text-gray-400 text-center py-4">登録された特別支出はありません</p>`; } 
                 else {
                     [...s.specialPayments].sort((a,b) => (a.targetMonth || '9999-99').localeCompare(b.targetMonth || '9999-99')).forEach(item => {
                         if (s.editMode && s.editMode.type === 'special' && s.editMode.id === item.id) {
-                            html += `<form onsubmit="App.saveEdit(event, 'special', ${item.id})" class="bg-indigo-50 rounded-xl border border-indigo-200 p-4 space-y-3 shadow-inner"><div class="flex flex-col sm:flex-row gap-2"><input name="name" type="text" value="${escapeHTML(item.name)}" class="flex-1 px-3 py-2 text-sm border rounded focus:ring-1 focus:ring-indigo-300" placeholder="項目名" required/><input name="amount" type="text" value="${escapeHTML(item.amount)}" class="w-full sm:w-32 px-3 py-2 text-sm border rounded focus:ring-1 focus:ring-indigo-300" placeholder="目標金額" required/></div><div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center"><div class="flex items-center gap-1 border bg-white rounded-lg px-2 flex-1 sm:flex-none"><span class="text-xs font-bold text-gray-500 whitespace-nowrap">支払月:</span><input name="targetMonth" type="month" value="${item.targetMonth||''}" class="flex-1 sm:w-32 py-2 text-sm outline-none" required/></div><input name="memo" type="text" value="${escapeHTML(item.memo)}" class="flex-1 px-3 py-2 text-sm border rounded min-w-0" placeholder="メモ"/></div><div class="flex justify-end gap-2"><button type="button" onclick="App.cancelEdit()" class="px-4 py-2 text-sm bg-white border rounded font-bold text-gray-600">キャンセル</button><button type="submit" class="px-4 py-2 text-sm bg-indigo-600 text-white font-bold rounded">保存</button></div></form>`;
+                            html += `
+                                <form onsubmit="App.saveEdit(event, 'special', ${item.id})" class="bg-indigo-50 rounded-xl border border-indigo-200 p-4 space-y-3 shadow-inner">
+                                    <div class="flex flex-col sm:flex-row gap-2"><input name="name" type="text" value="${escapeHTML(item.name)}" class="flex-1 px-3 py-2 text-sm border rounded focus:ring-1 focus:ring-indigo-300" placeholder="項目名" required/><input name="amount" type="text" value="${escapeHTML(item.amount)}" class="w-full sm:w-32 px-3 py-2 text-sm border rounded focus:ring-1 focus:ring-indigo-300" placeholder="目標金額" required/></div>
+                                    <div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center"><div class="flex items-center gap-1 border bg-white rounded-lg px-2 flex-1 sm:flex-none"><span class="text-xs font-bold text-gray-500 whitespace-nowrap">支払月:</span><input name="targetMonth" type="month" value="${item.targetMonth||''}" class="flex-1 sm:w-32 py-2 text-sm outline-none" required/></div><input name="memo" type="text" value="${escapeHTML(item.memo)}" class="flex-1 px-3 py-2 text-sm border rounded min-w-0" placeholder="メモ"/></div>
+                                    <div class="flex justify-end gap-2"><button type="button" onclick="App.cancelEdit()" class="px-4 py-2 text-sm bg-white border rounded font-bold text-gray-600">キャンセル</button><button type="submit" class="px-4 py-2 text-sm bg-indigo-600 text-white font-bold rounded">保存</button></div>
+                                </form>
+                            `;
                         } else {
                             let monthsLeftText = '未定', monthlyAmt = 0;
-                            if (item.targetMonth) { const curDate = new Date(); const [ty, tm] = item.targetMonth.split('-'); let ml = (parseInt(ty) - curDate.getFullYear()) * 12 + (parseInt(tm) - (curDate.getMonth() + 1)) + 1; if (ml < 1) ml = 1; monthsLeftText = `残り ${ml}ヶ月`; monthlyAmt = Math.ceil(App.calcAmount(item.amount) / ml); }
-                            html += `<div class="bg-white rounded-lg p-4 shadow-sm border border-gray-100 flex items-center gap-4 transition-all ${item.isDone ? 'opacity-40 bg-gray-50' : 'hover:shadow-md'}"><div class="flex-1 min-w-0"><div class="flex items-center gap-2 mb-1"><span class="font-bold text-gray-800 text-lg ${item.isDone ? 'line-through' : ''}">${escapeHTML(item.name)}</span>${item.targetMonth ? `<span class="bg-indigo-100 text-indigo-800 text-xs px-2 py-0.5 rounded-full font-bold flex items-center gap-1">${App.getIconHTML('event', 14)}${item.targetMonth.replace('-','年')}月</span>` : ''}</div><div class="flex flex-wrap items-end gap-x-4 gap-y-1 text-sm"><div><span class="text-xs text-gray-500 block mb-0.5">目標金額</span><span class="font-black text-gray-700">${App.formatCurrency(item.amount)}</span></div>${!item.isDone && item.targetMonth ? `<div><span class="text-xs text-gray-500 block mb-0.5">単独積立の目安 (${monthsLeftText})</span><span class="font-bold text-rose-500">${App.formatCurrency(monthlyAmt)} /月</span></div>` : ''}</div>${item.memo ? `<div class="text-[10px] text-gray-400 mt-2 flex items-start gap-1">${App.getIconHTML('message-square', 14, 'shrink-0 mt-0.5')} <span class="truncate">${escapeHTML(item.memo)}</span></div>` : ''}</div><div class="flex flex-col gap-2 shrink-0"><button type="button" onclick="App.toggleDone('special', ${item.id})" class="p-2 rounded-full transition-colors ${item.isDone ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-400 hover:bg-indigo-50 hover:text-indigo-600'}">${App.getIconHTML('check', 24)}</button><div class="flex justify-end gap-1"><button type="button" onclick="App.startEdit('special', ${item.id})" class="text-gray-400 hover:text-blue-500 p-1">${App.getIconHTML('pencil', 18)}</button><button type="button" onclick="App.requestDelete('specialPayment', ${item.id}, '${escapeHTML(item.name)}')" class="text-gray-400 hover:text-red-500 p-1">${App.getIconHTML('trash-2', 18)}</button></div></div></div>`;
+                            if (item.targetMonth) {
+                                const curDate = new Date(); const [ty, tm] = item.targetMonth.split('-');
+                                let ml = (parseInt(ty) - curDate.getFullYear()) * 12 + (parseInt(tm) - (curDate.getMonth() + 1)) + 1;
+                                if (ml < 1) ml = 1; monthsLeftText = `残り ${ml}ヶ月`; monthlyAmt = Math.ceil(App.calcAmount(item.amount) / ml);
+                            }
+                            html += `
+                                <div class="bg-white rounded-lg p-4 shadow-sm border border-gray-100 flex items-center gap-4 transition-all ${item.isDone ? 'opacity-40 bg-gray-50' : 'hover:shadow-md'}">
+                                    <div class="flex-1 min-w-0">
+                                        <div class="flex items-center gap-2 mb-1"><span class="font-bold text-gray-800 text-lg ${item.isDone ? 'line-through' : ''}">${escapeHTML(item.name)}</span>${item.targetMonth ? `<span class="bg-indigo-100 text-indigo-800 text-xs px-2 py-0.5 rounded-full font-bold flex items-center gap-1">${App.getIconHTML('event', 14)}${item.targetMonth.replace('-','年')}月</span>` : ''}</div>
+                                        <div class="flex flex-wrap items-end gap-x-4 gap-y-1 text-sm"><div><span class="text-xs text-gray-500 block mb-0.5">目標金額</span><span class="font-black text-gray-700">${App.formatCurrency(item.amount)}</span></div>${!item.isDone && item.targetMonth ? `<div><span class="text-xs text-gray-500 block mb-0.5">単独積立の目安 (${monthsLeftText})</span><span class="font-bold text-rose-500">${App.formatCurrency(monthlyAmt)} /月</span></div>` : ''}</div>
+                                        ${item.memo ? `<div class="text-[10px] text-gray-400 mt-2 flex items-start gap-1">${App.getIconHTML('message-square', 14, 'shrink-0 mt-0.5')} <span class="truncate">${escapeHTML(item.memo)}</span></div>` : ''}
+                                    </div>
+                                    <div class="flex flex-col gap-2 shrink-0"><button type="button" onclick="App.toggleDone('special', ${item.id})" class="p-2 rounded-full transition-colors ${item.isDone ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-400 hover:bg-indigo-50 hover:text-indigo-600'}">${App.getIconHTML('check', 24)}</button><div class="flex justify-end gap-1"><button type="button" onclick="App.startEdit('special', ${item.id})" class="text-gray-400 hover:text-blue-500 p-1">${App.getIconHTML('pencil', 18)}</button><button type="button" onclick="App.requestDelete('specialPayment', ${item.id}, '${escapeHTML(item.name)}')" class="text-gray-400 hover:text-red-500 p-1">${App.getIconHTML('trash-2', 18)}</button></div></div>
+                                </div>
+                            `;
                         }
                     });
                 }
                 html += `
                             </div>
-                            <form onsubmit="App.addSpecialPayment(event, this)" class="bg-gray-50 p-4 rounded-xl border border-gray-200 border-dashed space-y-3"><h4 class="text-sm font-bold text-gray-600 flex items-center gap-1">${App.getIconHTML('add_circle', 18)} 新しい特別支出を追加</h4><div class="flex flex-col sm:flex-row gap-2"><input name="spName" type="text" placeholder="項目名 (例: 固定資産税)" required class="flex-1 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-indigo-200"/><input name="spAmount" type="text" placeholder="目標金額" required class="w-full sm:w-32 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-indigo-200"/></div><div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center"><div class="flex items-center gap-1 border bg-white rounded-lg px-2 flex-1 sm:flex-none"><span class="text-xs font-bold text-gray-500 whitespace-nowrap">支払月:</span><input name="spMonth" type="month" class="flex-1 sm:w-32 py-2 text-sm outline-none" required/></div><div class="flex gap-2 flex-1 w-full"><input name="spMemo" type="text" placeholder="メモ" class="flex-1 px-3 py-2 text-sm border rounded-lg min-w-0"/><button type="submit" class="px-6 py-2 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 shrink-0">追加</button></div></div></form>
+                            <form onsubmit="App.addSpecialPayment(event, this)" class="bg-gray-50 p-4 rounded-xl border border-gray-200 border-dashed space-y-3">
+                                <h4 class="text-sm font-bold text-gray-600 flex items-center gap-1">${App.getIconHTML('add_circle', 18)} 新しい特別支出を追加</h4>
+                                <div class="flex flex-col sm:flex-row gap-2"><input name="spName" type="text" placeholder="項目名 (例: 固定資産税)" required class="flex-1 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-indigo-200"/><input name="spAmount" type="text" placeholder="目標金額" required class="w-full sm:w-32 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-indigo-200"/></div>
+                                <div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center"><div class="flex items-center gap-1 border bg-white rounded-lg px-2 flex-1 sm:flex-none"><span class="text-xs font-bold text-gray-500 whitespace-nowrap">支払月:</span><input name="spMonth" type="month" class="flex-1 sm:w-32 py-2 text-sm outline-none" required/></div><div class="flex gap-2 flex-1 w-full"><input name="spMemo" type="text" placeholder="メモ" class="flex-1 px-3 py-2 text-sm border rounded-lg min-w-0"/><button type="submit" class="shrink-0 px-6 py-2 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700">追加</button></div></div>
+                            </form>
                         </div>
                     </div>
                 `;
@@ -768,70 +1015,150 @@
                 const s = App.state;
                 let html = `
                     <div class="space-y-6 animate-fade-in max-w-4xl mx-auto">
-                        <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-100"><div class="flex items-center justify-between mb-6 border-b pb-4"><div><h2 class="text-xl font-bold text-gray-800 flex items-center gap-2">${App.getIconHTML('event_note', 28, 'text-orange-500')} 予定・備忘録メモ</h2><p class="text-sm text-gray-500 mt-1">スマホの機種変更や保険の更新など、忘れたくないイベントを記録します。</p></div></div><div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                        <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                            <div class="flex items-center justify-between mb-6 border-b pb-4"><div><h2 class="text-xl font-bold text-gray-800 flex items-center gap-2">${App.getIconHTML('event_note', 28, 'text-orange-500')} 予定・備忘録メモ</h2><p class="text-sm text-gray-500 mt-1">スマホの機種変更や保険の更新など、忘れたくないイベントを記録します。</p></div></div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
                 `;
+                
                 if (s.memos.length === 0) { html += `<div class="col-span-full py-8 text-center text-gray-400 border-2 border-dashed rounded-xl">登録されているメモはありません</div>`; } 
                 else {
                     s.memos.forEach(m => {
                         if (s.editMode && s.editMode.type === 'memo' && s.editMode.id === m.id) {
-                            html += `<form onsubmit="App.saveEdit(event, 'memo', ${m.id})" class="bg-orange-50 rounded-xl border border-orange-200 p-4 shadow-inner col-span-1"><input name="title" type="text" value="${escapeHTML(m.title)}" class="w-full px-3 py-2 text-sm font-bold border rounded focus:ring-1 focus:ring-orange-300 mb-2" placeholder="タイトル" required/><div class="flex items-center gap-1 border bg-white rounded px-2 mb-2"><span class="text-xs font-bold text-gray-500">予定日:</span><input name="targetDate" type="date" value="${m.targetDate||''}" class="flex-1 py-1.5 text-sm outline-none"/></div><textarea name="content" rows="3" class="w-full px-3 py-2 text-sm border rounded focus:ring-1 focus:ring-orange-300 mb-2" placeholder="メモの内容">${escapeHTML(m.content)}</textarea><div class="flex justify-end gap-2"><button type="button" onclick="App.cancelEdit()" class="px-4 py-1.5 text-sm bg-white border rounded font-bold text-gray-600">キャンセル</button><button type="submit" class="px-4 py-1.5 text-sm bg-orange-500 text-white font-bold rounded">保存</button></div></form>`;
+                            html += `
+                                <form onsubmit="App.saveEdit(event, 'memo', ${m.id})" class="bg-orange-50 rounded-xl border border-orange-200 p-4 shadow-inner col-span-1">
+                                    <input name="title" type="text" value="${escapeHTML(m.title)}" class="w-full px-3 py-2 text-sm font-bold border rounded focus:ring-1 focus:ring-orange-300 mb-2" placeholder="タイトル" required/>
+                                    <div class="flex items-center gap-1 border bg-white rounded px-2 mb-2"><span class="text-xs font-bold text-gray-500">予定日:</span><input name="targetDate" type="date" value="${m.targetDate||''}" class="flex-1 py-1.5 text-sm outline-none"/></div>
+                                    <textarea name="content" rows="3" class="w-full px-3 py-2 text-sm border rounded focus:ring-1 focus:ring-orange-300 mb-2" placeholder="メモの内容">${escapeHTML(m.content)}</textarea>
+                                    <div class="flex justify-end gap-2"><button type="button" onclick="App.cancelEdit()" class="px-4 py-1.5 text-sm bg-white border rounded font-bold text-gray-600">キャンセル</button><button type="submit" class="px-4 py-1.5 text-sm bg-orange-500 text-white font-bold rounded">保存</button></div>
+                                </form>
+                            `;
                         } else {
-                            html += `<div class="bg-white rounded-xl p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow relative group"><div class="flex justify-between items-start mb-2"><h4 class="font-bold text-gray-800 text-lg pr-8">${escapeHTML(m.title)}</h4><div class="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex bg-white rounded shadow-sm border"><button type="button" onclick="App.startEdit('memo', ${m.id})" class="p-1.5 text-gray-400 hover:text-blue-500">${App.getIconHTML('pencil', 16)}</button><button type="button" onclick="App.requestDelete('memo', ${m.id}, '${escapeHTML(m.title)}')" class="p-1.5 text-gray-400 hover:text-red-500 border-l">${App.getIconHTML('trash-2', 16)}</button></div></div>${m.targetDate ? `<div class="inline-flex items-center gap-1 bg-orange-100 text-orange-800 text-xs font-bold px-2 py-1 rounded-md mb-3">${App.getIconHTML('calendar_today', 14)}${m.targetDate.replace(/-/g, '/')}</div>` : ''}<p class="text-sm text-gray-600 whitespace-pre-wrap leading-relaxed">${escapeHTML(m.content)}</p></div>`;
+                            html += `
+                                <div class="bg-white rounded-xl p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow relative group">
+                                    <div class="flex justify-between items-start mb-2"><h4 class="font-bold text-gray-800 text-lg pr-8">${escapeHTML(m.title)}</h4><div class="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex bg-white rounded shadow-sm border"><button type="button" onclick="App.startEdit('memo', ${m.id})" class="p-1.5 text-gray-400 hover:text-blue-500">${App.getIconHTML('pencil', 16)}</button><button type="button" onclick="App.requestDelete('memo', ${m.id}, '${escapeHTML(m.title)}')" class="p-1.5 text-gray-400 hover:text-red-500 border-l">${App.getIconHTML('trash-2', 16)}</button></div></div>
+                                    ${m.targetDate ? `<div class="inline-flex items-center gap-1 bg-orange-100 text-orange-800 text-xs font-bold px-2 py-1 rounded-md mb-3">${App.getIconHTML('calendar_today', 14)}${m.targetDate.replace(/-/g, '/')}</div>` : ''}
+                                    <p class="text-sm text-gray-600 whitespace-pre-wrap leading-relaxed">${escapeHTML(m.content)}</p>
+                                </div>
+                            `;
                         }
                     });
                 }
+
                 html += `
                             </div>
-                            <form onsubmit="App.addMemo(event, this)" class="bg-gray-50 p-5 rounded-xl border border-gray-200 border-dashed"><h4 class="text-sm font-bold text-gray-600 mb-3 flex items-center gap-1">${App.getIconHTML('add_circle', 18)} 新しいメモを追加</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3"><input name="mTitle" type="text" placeholder="タイトル (例: 車検、スマホ買替)" required class="md:col-span-2 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-orange-200"/><div class="flex items-center gap-2 border bg-white rounded-lg px-3 py-2"><span class="text-xs font-bold text-gray-500">予定日:</span><input name="mDate" type="date" class="flex-1 text-sm outline-none bg-transparent"/></div></div><textarea name="mContent" rows="2" placeholder="メモの内容を自由に記述してください" class="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-orange-200 mb-3"></textarea><div class="text-right"><button type="submit" class="w-full sm:w-auto px-8 py-2 bg-orange-500 text-white font-bold rounded-lg hover:bg-orange-600 shadow-sm">追加する</button></div></form>
+                            <form onsubmit="App.addMemo(event, this)" class="bg-gray-50 p-5 rounded-xl border border-gray-200 border-dashed">
+                                <h4 class="text-sm font-bold text-gray-600 mb-3 flex items-center gap-1">${App.getIconHTML('add_circle', 18)} 新しいメモを追加</h4>
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3"><input name="mTitle" type="text" placeholder="タイトル (例: 車検、スマホ買替)" required class="md:col-span-2 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-orange-200"/><div class="flex items-center gap-2 border bg-white rounded-lg px-3 py-2"><span class="text-xs font-bold text-gray-500">予定日:</span><input name="mDate" type="date" class="flex-1 text-sm outline-none bg-transparent"/></div></div>
+                                <textarea name="mContent" rows="2" placeholder="メモの内容を自由に記述してください" class="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-orange-200 mb-3"></textarea>
+                                <div class="text-right"><button type="submit" class="w-full sm:w-auto px-8 py-2 bg-orange-500 text-white font-bold rounded-lg hover:bg-orange-600 shadow-sm">追加する</button></div>
+                            </form>
                         </div>
                     </div>
                 `;
                 return html;
             },
 
-            renderCashflow: function() {
-                const tot = App.totals; const isShort = tot.activeFinalBalance < 0;
-                return `
-                    <div class="bg-white rounded-2xl p-8 shadow-md border border-gray-100 animate-zoom-in max-w-5xl mx-auto"><h2 class="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2 pb-4 border-b border-gray-100">${App.getIconHTML('layout-dashboard', 24, 'text-indigo-600')} 今月の全体キャッシュフロー予想</h2><div class="grid grid-cols-1 md:grid-cols-3 gap-6"><div class="p-6 bg-blue-50 rounded-2xl border border-blue-100 flex flex-col justify-between"><div><p class="text-sm text-blue-600 font-bold mb-1">確保している資金</p><p class="text-xs text-blue-400 mb-4">全口座・現金 ＋ 未済の入金総額</p></div><p class="text-3xl font-black text-blue-800">${App.formatCurrency(tot.totalAccountsNum + tot.totalWalletsNum + tot.activeAccountIncomes + tot.remainingIncomes)}</p></div><div class="p-6 bg-rose-50 rounded-2xl border border-rose-100 flex flex-col justify-between"><div><p class="text-sm text-rose-600 font-bold mb-1">残りの支払い合計</p><p class="text-xs text-rose-400 mb-4">未済引落・消費 ＋ 当月の特別支出</p></div><p class="text-3xl font-black text-rose-800">${App.formatCurrency(tot.activePayments + tot.activeWalletsOutgo)}</p></div><div class="p-6 rounded-2xl border-2 flex flex-col justify-between ${isShort ? 'bg-red-50 border-red-300 shadow-sm' : 'bg-emerald-50 border-emerald-300 shadow-emerald-100 shadow-lg'}"><div><p class="text-sm font-bold flex items-center gap-1.5 mb-1 ${isShort ? 'text-red-600' : 'text-emerald-700'}">${App.getIconHTML(isShort ? 'alert-circle' : 'check-circle-2', 24)} 差引予測残高</p><p class="text-xs mb-4 ${isShort ? 'text-red-400' : 'text-emerald-500'}">${isShort ? '資金がショートするリスクがあります' : '引き落とし後も資金は確保できています'}</p></div><p class="text-4xl font-black tracking-tight ${isShort ? 'text-red-700' : 'text-emerald-700'}">${App.formatCurrency(tot.activeFinalBalance)}</p></div></div>${tot.currentMonthSpecialAmt > 0 ? `<p class="mt-6 text-sm font-bold text-indigo-600 bg-indigo-50 p-3 rounded-lg border border-indigo-100 text-center">💡 今月は特別支出（${App.formatCurrency(tot.currentMonthSpecialAmt)}）があるため、支払いに合算されています。</p>` : ''}</div>
-                `;
-            },
-
             renderHistory: function() {
                 const s = App.state;
                 let html = `
-                    <div class="space-y-6 animate-fade-in"><div class="bg-white rounded-2xl p-6 shadow-md border border-gray-100"><div class="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-4 gap-4 pb-4 border-b border-gray-100"><div><h2 class="text-xl font-bold text-gray-800">月次推移グラフ</h2><p class="text-sm text-gray-500 mt-1">棒をタップすると下に詳細が表示されます。</p></div><div class="flex flex-wrap items-center gap-2 bg-indigo-50 p-2 rounded-xl border border-indigo-100 w-full lg:w-auto"><input type="month" id="manualHistoryMonth" value="${s.manualHistoryMonth}" onchange="App.state.manualHistoryMonth = this.value" class="text-sm px-2 py-1.5 border rounded bg-white font-bold text-indigo-900" /><button onclick="App.triggerSaveHistory()" class="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-700 flex items-center gap-1">${App.getIconHTML('save', 16)} 月末残高として記録する</button></div></div><div class="flex bg-gray-100 p-1 rounded-lg w-max mb-6 overflow-x-auto hide-scrollbar max-w-full"><button onclick="App.setChartMode('all')" class="px-4 py-1.5 text-xs font-bold rounded-md transition-all whitespace-nowrap ${s.chartMode==='all'?'bg-white shadow text-gray-800':'text-gray-500 hover:bg-gray-200'}">すべて</button><button onclick="App.setChartMode('pay_cat')" class="px-4 py-1.5 text-xs font-bold rounded-md transition-all whitespace-nowrap ${s.chartMode==='pay_cat'?'bg-white shadow text-rose-600':'text-gray-500 hover:bg-gray-200'}">支払(カテゴリ別)</button><button onclick="App.setChartMode('pay_item')" class="px-4 py-1.5 text-xs font-bold rounded-md transition-all whitespace-nowrap ${s.chartMode==='pay_item'?'bg-white shadow text-indigo-600':'text-gray-500 hover:bg-gray-200'}">支払(項目別)</button><button onclick="App.setChartMode('inc_item')" class="px-4 py-1.5 text-xs font-bold rounded-md transition-all whitespace-nowrap ${s.chartMode==='inc_item'?'bg-white shadow text-emerald-600':'text-gray-500 hover:bg-gray-200'}">収入(項目別)</button></div>
+                    <div class="space-y-6 animate-fade-in">
+                        <div class="bg-white rounded-2xl p-6 shadow-md border border-gray-100">
+                            <div class="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-4 gap-4 pb-4 border-b border-gray-100">
+                                <div><h2 class="text-xl font-bold text-gray-800">月次推移グラフ</h2><p class="text-sm text-gray-500 mt-1">棒をタップすると下に詳細が表示されます。</p></div>
+                                <div class="flex flex-wrap items-center gap-2 bg-indigo-50 p-2 rounded-xl border border-indigo-100 w-full lg:w-auto"><input type="month" id="manualHistoryMonth" value="${s.manualHistoryMonth}" onchange="App.state.manualHistoryMonth = this.value" class="text-sm px-2 py-1.5 border rounded bg-white font-bold text-indigo-900" /><button onclick="App.triggerSaveHistory()" class="shrink-0 bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-700 flex items-center gap-1">${App.getIconHTML('save', 16)} 月末残高として記録</button></div>
+                            </div>
+                            
+                            <div class="flex bg-gray-100 p-1 rounded-lg w-max mb-6 overflow-x-auto hide-scrollbar max-w-full">
+                                <button onclick="App.setChartMode('all')" class="shrink-0 px-4 py-1.5 text-xs font-bold rounded-md transition-all whitespace-nowrap ${s.chartMode==='all'?'bg-white shadow text-gray-800':'text-gray-500 hover:bg-gray-200'}">すべて</button>
+                                <button onclick="App.setChartMode('pay_cat')" class="shrink-0 px-4 py-1.5 text-xs font-bold rounded-md transition-all whitespace-nowrap ${s.chartMode==='pay_cat'?'bg-white shadow text-rose-600':'text-gray-500 hover:bg-gray-200'}">支払(カテゴリ別)</button>
+                                <button onclick="App.setChartMode('pay_item')" class="shrink-0 px-4 py-1.5 text-xs font-bold rounded-md transition-all whitespace-nowrap ${s.chartMode==='pay_item'?'bg-white shadow text-indigo-600':'text-gray-500 hover:bg-gray-200'}">支払(項目別)</button>
+                                <button onclick="App.setChartMode('inc_item')" class="shrink-0 px-4 py-1.5 text-xs font-bold rounded-md transition-all whitespace-nowrap ${s.chartMode==='inc_item'?'bg-white shadow text-emerald-600':'text-gray-500 hover:bg-gray-200'}">収入(項目別)</button>
+                            </div>
                 `;
-                if (s.history.length === 0) { html += `<div class="h-64 mt-8 flex items-center justify-center border-b-2 border-gray-200 pb-2 relative"><p class="text-gray-400">履歴データがまだありません</p></div>`; } 
-                else {
+                
+                if (s.history.length === 0) {
+                    html += `<div class="h-64 mt-8 flex items-center justify-center border-b-2 border-gray-200 pb-2 relative"><p class="text-gray-400">履歴データがまだありません</p></div>`;
+                } else {
                     const rawMax = Math.max(...s.history.map(h => Math.max(Number(h.payment)||0, Number(h.balance)||0, Number(h.income)||0)), 1);
-                    const maxVal = App.getNiceMax(rawMax); const yAxisValues = [1, 0.75, 0.5, 0.25, 0].map(ratio => maxVal * ratio); const len = s.history.length; let svgLines = '';
+                    const maxVal = App.getNiceMax(rawMax);
+                    const yAxisValues = [1, 0.75, 0.5, 0.25, 0].map(ratio => maxVal * ratio);
+                    const len = s.history.length;
+
+                    let svgLines = '';
                     for (let i = 0; i < len - 1; i++) {
-                        const h1 = s.history[i]; const h2 = s.history[i+1]; const x1 = ((i + 0.5) / len) * 100; const x2 = ((i + 1.5) / len) * 100; const yBal1 = Math.max(Math.min((h1.balance / maxVal) * 100, 100), 0); const yBal2 = Math.max(Math.min((h2.balance / maxVal) * 100, 100), 0);
+                        const h1 = s.history[i]; const h2 = s.history[i+1];
+                        const x1 = ((i + 0.5) / len) * 100; const x2 = ((i + 1.5) / len) * 100;
+                        const yBal1 = Math.max(Math.min((h1.balance / maxVal) * 100, 100), 0);
+                        const yBal2 = Math.max(Math.min((h2.balance / maxVal) * 100, 100), 0);
                         svgLines += `<line x1="${x1}%" y1="${100 - yBal1}%" x2="${x2}%" y2="${100 - yBal2}%" stroke="#10b981" stroke-width="2" stroke-dasharray="4 4" />`;
-                        if (s.chartMode === 'pay_cat' || s.chartMode === 'pay_item') { const yPay1 = Math.min((h1.payment / maxVal) * 100, 100); const yPay2 = Math.min((h2.payment / maxVal) * 100, 100); svgLines += `<line x1="${x1}%" y1="${100 - yPay1}%" x2="${x2}%" y2="${100 - yPay2}%" stroke="#f43f5e" stroke-width="2" stroke-dasharray="4 4" opacity="0.5" />`; } else if (s.chartMode === 'inc_item') { const yInc1 = Math.min(((h1.income||0) / maxVal) * 100, 100); const yInc2 = Math.min(((h2.income||0) / maxVal) * 100, 100); svgLines += `<line x1="${x1}%" y1="${100 - yInc1}%" x2="${x2}%" y2="${100 - yInc2}%" stroke="#34d399" stroke-width="2" stroke-dasharray="4 4" opacity="0.5" />`; }
+                        
+                        if (s.chartMode === 'pay_cat' || s.chartMode === 'pay_item') {
+                            const yPay1 = Math.min((h1.payment / maxVal) * 100, 100); const yPay2 = Math.min((h2.payment / maxVal) * 100, 100);
+                            svgLines += `<line x1="${x1}%" y1="${100 - yPay1}%" x2="${x2}%" y2="${100 - yPay2}%" stroke="#f43f5e" stroke-width="2" stroke-dasharray="4 4" opacity="0.5" />`;
+                        } else if (s.chartMode === 'inc_item') {
+                            const yInc1 = Math.min(((h1.income||0) / maxVal) * 100, 100); const yInc2 = Math.min(((h2.income||0) / maxVal) * 100, 100);
+                            svgLines += `<line x1="${x1}%" y1="${100 - yInc1}%" x2="${x2}%" y2="${100 - yInc2}%" stroke="#34d399" stroke-width="2" stroke-dasharray="4 4" opacity="0.5" />`;
+                        }
                     }
-                    html += `<div class="relative h-[250px] mt-2 flex"><div class="w-16 shrink-0 flex flex-col justify-between items-end pr-2 pb-8 text-[10px] text-gray-400 font-mono z-10 bg-white border-r border-gray-100">${yAxisValues.map(val => `<span>${val === 0 ? '0' : App.formatCurrency(val).replace('￥', '¥').replace('.00', '')}</span>`).join('')}</div><div class="flex-1 overflow-x-auto hide-scrollbar relative border-b-2 border-gray-200 pb-8"><div class="absolute inset-0 flex flex-col justify-between pointer-events-none z-0 pb-8 px-2 min-w-full">${[1, 2, 3, 4, 5].map(() => `<div class="w-full border-t border-gray-200 border-dashed"></div>`).join('')}</div><div class="flex items-end justify-around gap-6 h-full px-4 min-w-max relative z-10"><svg class="absolute inset-0 w-full h-full pointer-events-none z-0 overflow-visible" preserveAspectRatio="none">${svgLines}</svg>`;
+                    
+                    html += `<div class="relative h-[250px] mt-2 flex">`;
+                    html += `<div class="w-16 shrink-0 flex flex-col justify-between items-end pr-2 pb-8 text-[10px] text-gray-400 font-mono z-10 bg-white border-r border-gray-100">${yAxisValues.map(val => `<span>${val === 0 ? '0' : App.formatCurrency(val).replace('￥', '¥').replace('.00', '')}</span>`).join('')}</div>`;
+                    html += `<div class="flex-1 overflow-x-auto hide-scrollbar relative border-b-2 border-gray-200 pb-8"><div class="absolute inset-0 flex flex-col justify-between pointer-events-none z-0 pb-8 px-2 min-w-full">${[1, 2, 3, 4, 5].map(() => `<div class="w-full border-t border-gray-200 border-dashed"></div>`).join('')}</div><div class="flex items-end justify-around gap-6 h-full px-4 min-w-max relative z-10"><svg class="absolute inset-0 w-full h-full pointer-events-none z-0 overflow-visible" preserveAspectRatio="none">${svgLines}</svg>`;
+                    
                     s.history.forEach((data, i) => {
-                        const isSelected = s.selectedHistoryId === data.id; const paymentValue = Number(data.payment) || 0; const balanceValue = Number(data.balance) || 0; const incomeValue = Number(data.income) || 0; const paymentHeight = (paymentValue / maxVal) * 100; const incomeHeight = (incomeValue / maxVal) * 100; const isShort = balanceValue < 0;
-                        let incBarsHTML = ''; const incDetails = data.incomeDetails || (incomeValue > 0 ? [{name: '過去の収入', amount: incomeValue}] : []);
-                        if (s.chartMode === 'all' || incDetails.length === 0) { incBarsHTML = `<div class="w-full h-full bg-emerald-300 rounded-t-[2px]"></div>`; } else { incDetails.forEach(d => { incBarsHTML += `<div style="height: ${(d.amount / incomeValue) * 100}%;" class="${App.getColorForName(d.name)} w-full rounded-t-[1px]"></div>`; }); }
+                        const isSelected = s.selectedHistoryId === data.id;
+                        const paymentValue = Number(data.payment) || 0; const balanceValue = Number(data.balance) || 0; const incomeValue = Number(data.income) || 0;
+                        const paymentHeight = (paymentValue / maxVal) * 100; const incomeHeight = (incomeValue / maxVal) * 100; const isShort = balanceValue < 0;
+                        
+                        let incBarsHTML = '';
+                        const incDetails = data.incomeDetails || (incomeValue > 0 ? [{name: '過去の収入', amount: incomeValue}] : []);
+                        if (s.chartMode === 'all') { incBarsHTML = `<div class="w-full h-full bg-emerald-300 rounded-t-[2px]"></div>`; } 
+                        else {
+                            if (incDetails.length === 0) { incBarsHTML = `<div class="w-full h-full bg-emerald-300 rounded-t-[2px]"></div>`; } 
+                            else { incDetails.forEach(d => { incBarsHTML += `<div style="height: ${(d.amount / incomeValue) * 100}%;" class="${App.getColorForName(d.name)} w-full rounded-t-[1px]"></div>`; }); }
+                        }
+
                         let payBarsCatHTML = '';
                         if (data.catTotals && paymentValue > 0) {
                             const c = data.catTotals; const totalCat = (c.loan||0) + (c.fixed||0) + (c.variable||0) + (c.investment||0);
-                            if (totalCat === 0) { payBarsCatHTML = `<div class="w-full h-full bg-rose-400 rounded-t-[2px]"></div>`; } else { payBarsCatHTML += c.investment > 0 ? `<div style="height: ${(c.investment / totalCat) * 100}%;" class="bg-emerald-400 w-full rounded-t-[1px]"></div>` : ''; payBarsCatHTML += c.variable > 0 ? `<div style="height: ${(c.variable / totalCat) * 100}%;" class="bg-rose-400 w-full rounded-t-[1px]"></div>` : ''; payBarsCatHTML += c.fixed > 0 ? `<div style="height: ${(c.fixed / totalCat) * 100}%;" class="bg-indigo-400 w-full rounded-t-[1px]"></div>` : ''; payBarsCatHTML += c.loan > 0 ? `<div style="height: ${(c.loan / totalCat) * 100}%;" class="bg-purple-400 w-full rounded-t-[1px]"></div>` : ''; }
+                            if (totalCat === 0) { payBarsCatHTML = `<div class="w-full h-full bg-rose-400 rounded-t-[2px]"></div>`; } 
+                            else {
+                                payBarsCatHTML += c.investment > 0 ? `<div style="height: ${(c.investment / totalCat) * 100}%;" class="bg-emerald-400 w-full rounded-t-[1px]"></div>` : '';
+                                payBarsCatHTML += c.variable > 0 ? `<div style="height: ${(c.variable / totalCat) * 100}%;" class="bg-rose-400 w-full rounded-t-[1px]"></div>` : '';
+                                payBarsCatHTML += c.fixed > 0 ? `<div style="height: ${(c.fixed / totalCat) * 100}%;" class="bg-indigo-400 w-full rounded-t-[1px]"></div>` : '';
+                                payBarsCatHTML += c.loan > 0 ? `<div style="height: ${(c.loan / totalCat) * 100}%;" class="bg-purple-400 w-full rounded-t-[1px]"></div>` : '';
+                            }
                         } else { payBarsCatHTML = `<div class="w-full h-full bg-rose-400 rounded-t-[2px]"></div>`; }
+
                         let payBarsItemHTML = ''; let payItemsMap = {};
                         if (data.details) { Object.keys(data.details).forEach(cat => { data.details[cat].forEach(d => { if(!payItemsMap[d.name]) payItemsMap[d.name] = 0; payItemsMap[d.name] += d.amount; }); }); } else if (paymentValue > 0) { payItemsMap['過去の支払い'] = paymentValue; }
                         const payItemNames = Object.keys(payItemsMap);
-                        if (payItemNames.length === 0) { payBarsItemHTML = `<div class="w-full h-full bg-rose-400 rounded-t-[2px]"></div>`; } else { payItemNames.forEach(name => { payBarsItemHTML += `<div style="height: ${(payItemsMap[name] / paymentValue) * 100}%;" class="${App.getColorForName(name)} w-full rounded-t-[1px]"></div>`; }); }
+                        if (payItemNames.length === 0) { payBarsItemHTML = `<div class="w-full h-full bg-rose-400 rounded-t-[2px]"></div>`; } 
+                        else { payItemNames.forEach(name => { payBarsItemHTML += `<div style="height: ${(payItemsMap[name] / paymentValue) * 100}%;" class="${App.getColorForName(name)} w-full rounded-t-[1px]"></div>`; }); }
+
                         let visibleBars = '';
-                        if (s.chartMode === 'all') { visibleBars = `<div class="flex items-end justify-center gap-1 w-full h-full relative z-10"><div class="w-3.5 flex flex-col justify-end transition-all duration-500 rounded-t-sm overflow-hidden" style="height: ${incomeHeight}%;">${incBarsHTML}</div><div class="w-3.5 flex flex-col justify-end transition-all duration-500 rounded-t-sm overflow-hidden" style="height: ${paymentHeight}%;">${payBarsCatHTML}</div></div>`; } else if (s.chartMode === 'pay_cat') { visibleBars = `<div class="w-4 mx-auto flex flex-col justify-end transition-all duration-500 rounded-t-sm overflow-hidden relative z-10" style="height: ${paymentHeight}%;">${payBarsCatHTML}</div>`; } else if (s.chartMode === 'pay_item') { visibleBars = `<div class="w-4 mx-auto flex flex-col justify-end transition-all duration-500 rounded-t-sm overflow-hidden relative z-10" style="height: ${paymentHeight}%;">${payBarsItemHTML}</div>`; } else if (s.chartMode === 'inc_item') { visibleBars = `<div class="w-4 mx-auto flex flex-col justify-end transition-all duration-500 rounded-t-sm overflow-hidden relative z-10" style="height: ${incomeHeight}%;">${incBarsHTML}</div>`; }
-                        html += `<div class="flex flex-col items-center flex-1 min-w-[65px] h-full relative cursor-pointer group outline-none" onclick="App.selectHistory('${data.id}')" tabindex="0"><div class="opacity-0 group-focus:opacity-100 md:group-hover:opacity-100 transition-opacity absolute bottom-full mb-2 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white text-xs p-3 rounded-xl pointer-events-none z-50 whitespace-nowrap shadow-xl"><div class="absolute -bottom-1.5 left-1/2 transform -translate-x-1/2 w-3 h-3 bg-gray-800 rotate-45"></div><div class="relative z-10"><p class="font-bold text-emerald-300">総入金: ${App.formatCurrency(incomeValue)}</p><p class="border-b border-gray-600 pb-1 mb-1 text-rose-300">総支払: ${App.formatCurrency(paymentValue)}</p><p class="pt-1 font-bold">月末残高: ${App.formatCurrency(balanceValue)}</p></div></div><div class="w-full h-full flex justify-center items-end relative transition-all duration-300 ${isSelected ? 'opacity-100 drop-shadow-md scale-[1.15]' : (s.selectedHistoryId ? 'opacity-40 grayscale-[50%]' : 'opacity-100 hover:opacity-80')}">${visibleBars}<div class="absolute w-10 h-1 z-30 ${isShort ? 'bg-red-500' : 'bg-emerald-500'} rounded-full shadow-sm" style="bottom: ${Math.max(Math.min((balanceValue / maxVal) * 100, 100), -2)}%; left:50%; transform:translateX(-50%);"></div></div><span class="text-[10px] ${isSelected ? 'text-indigo-600 font-black' : 'text-gray-500 font-bold'} mt-2 whitespace-nowrap absolute -bottom-6">${escapeHTML(data.label)}</span></div>`;
+                        if (s.chartMode === 'all') {
+                            visibleBars = `<div class="flex items-end justify-center gap-1 w-full h-full relative z-10"><div class="w-3.5 flex flex-col justify-end transition-all duration-500 rounded-t-sm overflow-hidden" style="height: ${incomeHeight}%;">${incBarsHTML}</div><div class="w-3.5 flex flex-col justify-end transition-all duration-500 rounded-t-sm overflow-hidden" style="height: ${paymentHeight}%;">${payBarsCatHTML}</div></div>`;
+                        } else if (s.chartMode === 'pay_cat') { visibleBars = `<div class="w-4 mx-auto flex flex-col justify-end transition-all duration-500 rounded-t-sm overflow-hidden relative z-10" style="height: ${paymentHeight}%;">${payBarsCatHTML}</div>`; } 
+                        else if (s.chartMode === 'pay_item') { visibleBars = `<div class="w-4 mx-auto flex flex-col justify-end transition-all duration-500 rounded-t-sm overflow-hidden relative z-10" style="height: ${paymentHeight}%;">${payBarsItemHTML}</div>`; } 
+                        else if (s.chartMode === 'inc_item') { visibleBars = `<div class="w-4 mx-auto flex flex-col justify-end transition-all duration-500 rounded-t-sm overflow-hidden relative z-10" style="height: ${incomeHeight}%;">${incBarsHTML}</div>`; }
+
+                        html += `
+                                <div class="flex flex-col items-center flex-1 min-w-[65px] h-full relative cursor-pointer group outline-none" onclick="App.selectHistory('${data.id}')" tabindex="0">
+                                    <div class="opacity-0 group-focus:opacity-100 md:group-hover:opacity-100 transition-opacity absolute bottom-full mb-2 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white text-xs p-3 rounded-xl pointer-events-none z-50 whitespace-nowrap shadow-xl"><div class="absolute -bottom-1.5 left-1/2 transform -translate-x-1/2 w-3 h-3 bg-gray-800 rotate-45"></div><div class="relative z-10"><p class="font-bold text-emerald-300">総入金: ${App.formatCurrency(incomeValue)}</p><p class="border-b border-gray-600 pb-1 mb-1 text-rose-300">総支払: ${App.formatCurrency(paymentValue)}</p><p class="pt-1 font-bold">月末残高: ${App.formatCurrency(balanceValue)}</p></div></div>
+                                    <div class="w-full h-full flex justify-center items-end relative transition-all duration-300 ${isSelected ? 'opacity-100 drop-shadow-md scale-[1.15]' : (s.selectedHistoryId ? 'opacity-40 grayscale-[50%]' : 'opacity-100 hover:opacity-80')}">${visibleBars}<div class="absolute w-10 h-1 z-30 ${isShort ? 'bg-red-500' : 'bg-emerald-500'} rounded-full shadow-sm" style="bottom: ${Math.max(Math.min((balanceValue / maxVal) * 100, 100), -2)}%; left:50%; transform:translateX(-50%);"></div></div>
+                                    <span class="text-[10px] ${isSelected ? 'text-indigo-600 font-black' : 'text-gray-500 font-bold'} mt-2 whitespace-nowrap absolute -bottom-6">${escapeHTML(data.label)}</span>
+                                </div>
+                        `;
                     });
                     html += `</div></div></div>`;
                 }
+                
                 let legendHTML = '';
-                if (s.chartMode === 'all') { legendHTML = `<span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-emerald-300 rounded-sm"></div>収入合計</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-purple-400 rounded-sm"></div>ローン</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-indigo-400 rounded-sm"></div>固定費</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-rose-400 rounded-sm"></div>変動費</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-emerald-400 rounded-sm"></div>投資</span>`; } else if (s.chartMode === 'pay_cat') { legendHTML = `<span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-purple-400 rounded-sm"></div>ローン</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-indigo-400 rounded-sm"></div>固定費</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-rose-400 rounded-sm"></div>変動費</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-emerald-400 rounded-sm"></div>投資</span>`; } else if (s.chartMode === 'pay_item' || s.chartMode === 'inc_item') { legendHTML = `<span class="text-gray-500 font-bold">※項目名ごとに自動で色が割り当てられています</span>`; }
+                if (s.chartMode === 'all') { legendHTML = `<span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-emerald-300 rounded-sm"></div>収入合計</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-purple-400 rounded-sm"></div>ローン</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-indigo-400 rounded-sm"></div>固定費</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-rose-400 rounded-sm"></div>変動費</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-emerald-400 rounded-sm"></div>投資</span>`; } 
+                else if (s.chartMode === 'pay_cat') { legendHTML = `<span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-purple-400 rounded-sm"></div>ローン</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-indigo-400 rounded-sm"></div>固定費</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-rose-400 rounded-sm"></div>変動費</span><span class="flex items-center gap-1"><div class="w-2.5 h-2.5 bg-emerald-400 rounded-sm"></div>投資</span>`; } 
+                else if (s.chartMode === 'pay_item' || s.chartMode === 'inc_item') { legendHTML = `<span class="text-gray-500 font-bold">※項目名ごとに自動で色が割り当てられています</span>`; }
+
                 html += `<div class="flex justify-center gap-4 mt-6 text-[10px] sm:text-xs text-gray-600 flex-wrap">${legendHTML}<span class="flex items-center gap-1 ml-4"><div class="w-4 h-1 border-t-2 border-dashed border-emerald-500"></div>残高の推移</span></div></div>`;
 
                 if (s.selectedHistoryId) {
@@ -840,25 +1167,77 @@
                         html += `<div class="bg-white rounded-2xl p-6 shadow-lg border border-indigo-200 animate-fade-in mt-6">`;
                         if (s.historyEditMode === sel.id) {
                             const temp = s.tempHistoryEditData;
-                            html += `<div class="flex items-center justify-between mb-4 border-b pb-3"><h3 class="text-lg font-black text-indigo-800">${escapeHTML(temp.label)} の内訳を修正</h3><button onclick="App.cancelHistoryEdit()" class="text-gray-400 hover:text-gray-700">${App.getIconHTML('x', 24)}</button></div><form onsubmit="App.saveHistoryEdit(event, '${temp.id}')" class="space-y-4"><div class="grid grid-cols-1 sm:grid-cols-2 gap-4"><div class="bg-blue-50 p-4 rounded-xl border border-blue-100"><label class="text-sm font-bold text-blue-800 block mb-1">総入金・収入 (円)</label><input type="number" id="edit-hist-income" value="${temp.income||0}" onchange="App.updateTempHistoryIncome(this.value)" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-300 bg-white" required /></div><div class="${temp.balance < 0 ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200'} p-4 rounded-xl border"><label class="text-sm font-bold ${temp.balance < 0 ? 'text-red-800' : 'text-emerald-800'} block mb-1">月末残高 (円)</label><input type="number" id="edit-hist-balance" value="${temp.balance}" onchange="App.updateTempHistoryBalance(this.value)" class="w-full px-3 py-2 border rounded-lg bg-white" required /></div></div><div class="mt-4 pt-2 border-t border-gray-100"><p class="text-sm font-bold text-gray-700 mb-3">各明細を修正 (自動で総額が再計算されます)</p>`;
-                            if (temp.incomeDetails && temp.incomeDetails.length > 0) { html += `<div class="mb-4 bg-blue-50/50 rounded-xl p-3 border border-blue-100"><div class="font-bold text-blue-700 mb-2 border-b border-blue-200 pb-2">入金・収入の内訳</div><div class="space-y-2 pl-2">`; temp.incomeDetails.forEach(i => { html += `<div class="flex justify-between items-center gap-2"><span class="text-sm text-gray-600 flex-1 truncate">${escapeHTML(i.name)}</span><input type="number" value="${i.amount}" onchange="App.updateTempHistoryIncomeDetail('${i.id}', this.value)" class="w-24 px-2 py-1 text-sm border rounded bg-white shadow-sm" /></div>`; }); html += `</div></div>`; }
-                            Object.keys(CAT_LABELS).forEach(cat => { const items = temp.details[cat]; if (items && items.length > 0) { html += `<div class="mb-4 bg-gray-50 rounded-xl p-3 border border-gray-200"><div class="flex justify-between items-center font-bold ${CAT_LABELS[cat].color} mb-2 border-b border-gray-200 pb-2"><span class="flex items-center gap-1.5"><span class="w-3 h-3 ${CAT_LABELS[cat].bg} rounded-sm"></span>${CAT_LABELS[cat].label}</span><span>計: ${App.formatCurrency(temp.catTotals[cat])}</span></div><div class="space-y-2 pl-2">`; items.forEach(i => { html += `<div class="flex justify-between items-center gap-2"><span class="text-sm text-gray-600 flex-1 truncate">${escapeHTML(i.name)}</span><input type="number" value="${i.amount}" onchange="App.updateTempHistoryDetail('${cat}', '${i.id}', this.value)" class="w-24 px-2 py-1 text-sm border rounded bg-white shadow-sm" /></div>`; }); html += `</div></div>`; } });
-                            html += `</div><div class="flex justify-end gap-3 mt-4 pt-4 border-t border-gray-200"><div class="flex-1 text-left flex flex-col justify-center"><span class="text-xs text-gray-500">修正後の総支払</span><span class="font-black text-lg text-rose-700">${App.formatCurrency(temp.payment)}</span></div><button type="button" onclick="App.cancelHistoryEdit()" class="px-4 py-2.5 bg-white border border-gray-300 text-gray-700 font-bold rounded-lg hover:bg-gray-50">キャンセル</button><button type="submit" class="px-6 py-2.5 bg-indigo-600 text-white font-bold rounded-lg shadow hover:bg-indigo-700">保存して完了</button></div></form>`;
+                            html += `
+                                <div class="flex items-center justify-between mb-4 border-b pb-3"><h3 class="text-lg font-black text-indigo-800">${escapeHTML(temp.label)} の内訳を修正</h3><button onclick="App.cancelHistoryEdit()" class="text-gray-400 hover:text-gray-700">${App.getIconHTML('x', 24)}</button></div>
+                                <form onsubmit="App.saveHistoryEdit(event, '${temp.id}')" class="space-y-4">
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div class="bg-blue-50 p-4 rounded-xl border border-blue-100"><label class="text-sm font-bold text-blue-800 block mb-1">総入金・収入 (円)</label><input type="number" id="edit-hist-income" value="${temp.income||0}" onchange="App.updateTempHistoryIncome(this.value)" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-300 bg-white" required /></div>
+                                        <div class="${temp.balance < 0 ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200'} p-4 rounded-xl border"><label class="text-sm font-bold ${temp.balance < 0 ? 'text-red-800' : 'text-emerald-800'} block mb-1">月末残高 (円)</label><input type="number" id="edit-hist-balance" value="${temp.balance}" onchange="App.updateTempHistoryBalance(this.value)" class="w-full px-3 py-2 border rounded-lg bg-white" required /></div>
+                                    </div>
+                                    <div class="mt-4 pt-2 border-t border-gray-100"><p class="text-sm font-bold text-gray-700 mb-3">各明細を修正 (自動で総額が再計算されます)</p>
+                            `;
+                            if (temp.incomeDetails && temp.incomeDetails.length > 0) {
+                                html += `<div class="mb-4 bg-blue-50/50 rounded-xl p-3 border border-blue-100"><div class="font-bold text-blue-700 mb-2 border-b border-blue-200 pb-2">入金・収入の内訳</div><div class="space-y-2 pl-2">`;
+                                temp.incomeDetails.forEach(i => { html += `<div class="flex justify-between items-center gap-2"><span class="text-sm text-gray-600 flex-1 truncate">${escapeHTML(i.name)}</span><input type="number" value="${i.amount}" onchange="App.updateTempHistoryIncomeDetail('${i.id}', this.value)" class="w-24 px-2 py-1 text-sm border rounded bg-white shadow-sm" /></div>`; });
+                                html += `</div></div>`;
+                            }
+                            Object.keys(CAT_LABELS).forEach(cat => {
+                                const items = temp.details[cat];
+                                if (items && items.length > 0) {
+                                    html += `<div class="mb-4 bg-gray-50 rounded-xl p-3 border border-gray-200"><div class="flex justify-between items-center font-bold ${CAT_LABELS[cat].color} mb-2 border-b border-gray-200 pb-2"><span class="flex items-center gap-1.5"><span class="w-3 h-3 ${CAT_LABELS[cat].bg} rounded-sm"></span>${CAT_LABELS[cat].label}</span><span>計: ${App.formatCurrency(temp.catTotals[cat])}</span></div><div class="space-y-2 pl-2">`;
+                                    items.forEach(i => { html += `<div class="flex justify-between items-center gap-2"><span class="text-sm text-gray-600 flex-1 truncate">${escapeHTML(i.name)}</span><input type="number" value="${i.amount}" onchange="App.updateTempHistoryDetail('${cat}', '${i.id}', this.value)" class="w-24 px-2 py-1 text-sm border rounded bg-white shadow-sm" /></div>`; });
+                                    html += `</div></div>`;
+                                }
+                            });
+                            html += `
+                                    </div>
+                                    <div class="flex justify-end gap-3 mt-4 pt-4 border-t border-gray-200">
+                                        <div class="flex-1 text-left flex flex-col justify-center"><span class="text-xs text-gray-500">修正後の総支払</span><span class="font-black text-lg text-rose-700">${App.formatCurrency(temp.payment)}</span></div>
+                                        <button type="button" onclick="App.cancelHistoryEdit()" class="px-4 py-2.5 bg-white border border-gray-300 text-gray-700 font-bold rounded-lg hover:bg-gray-50">キャンセル</button><button type="submit" class="px-6 py-2.5 bg-indigo-600 text-white font-bold rounded-lg shadow hover:bg-indigo-700">保存して完了</button>
+                                    </div>
+                                </form>
+                            `;
                         } else {
-                            html += `<div class="flex items-center justify-between mb-6"><h3 class="text-xl font-black text-indigo-900 border-l-4 border-indigo-500 pl-3">${escapeHTML(sel.label)} の詳細</h3><button onclick="App.selectHistory(null)" class="p-1 text-gray-400 hover:bg-gray-100 rounded-full">${App.getIconHTML('close', 24)}</button></div><div class="grid grid-cols-1 md:grid-cols-3 gap-6"><div class="bg-blue-50 rounded-xl p-5 border border-blue-100 flex flex-col justify-start"><p class="text-sm text-blue-700 font-bold mb-1">総入金・収入</p><p class="text-3xl font-black text-blue-900 mb-4">${App.formatCurrency(sel.income||0)}</p>`;
-                            if (sel.incomeDetails && sel.incomeDetails.length > 0) { html += `<ul class="text-xs text-gray-600 space-y-1 border-t border-blue-200 pt-3">`; sel.incomeDetails.forEach(i => { html += `<li class="flex justify-between items-center"><div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm ${App.getColorForName(i.name)}"></span><span class="truncate">${escapeHTML(i.name)}</span></div><span class="font-bold">${App.formatCurrency(i.amount)}</span></li>`; }); html += `</ul>`; } else { html += `<p class="text-[10px] text-gray-400 mt-2 border-t border-blue-200 pt-2">内訳データはありません</p>`; }
+                            html += `
+                                <div class="flex items-center justify-between mb-6"><h3 class="text-xl font-black text-indigo-900 border-l-4 border-indigo-500 pl-3">${escapeHTML(sel.label)} の詳細</h3><button onclick="App.selectHistory(null)" class="p-1 text-gray-400 hover:bg-gray-100 rounded-full">${App.getIconHTML('close', 24)}</button></div>
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                    <div class="bg-blue-50 rounded-xl p-5 border border-blue-100 flex flex-col justify-start"><p class="text-sm text-blue-700 font-bold mb-1">総入金・収入</p><p class="text-3xl font-black text-blue-900 mb-4">${App.formatCurrency(sel.income||0)}</p>
+                            `;
+                            if (sel.incomeDetails && sel.incomeDetails.length > 0) {
+                                html += `<ul class="text-xs text-gray-600 space-y-1 border-t border-blue-200 pt-3">`;
+                                sel.incomeDetails.forEach(i => { html += `<li class="flex justify-between items-center"><div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm ${App.getColorForName(i.name)}"></span><span class="truncate">${escapeHTML(i.name)}</span></div><span class="font-bold">${App.formatCurrency(i.amount)}</span></li>`; });
+                                html += `</ul>`;
+                            } else { html += `<p class="text-[10px] text-gray-400 mt-2 border-t border-blue-200 pt-2">内訳データはありません</p>`; }
                             html += `</div><div class="bg-gray-50 rounded-xl p-5 border border-gray-100 flex flex-col justify-start"><p class="text-sm text-gray-500 font-bold mb-1">発生総支払</p><p class="text-3xl font-black text-gray-800 mb-4">${App.formatCurrency(sel.payment)}</p>`;
                             if (sel.details && Object.keys(sel.details).some(k => sel.details[k].length > 0)) {
                                 html += `<div class="space-y-4 border-t border-gray-200 pt-4">`;
-                                Object.keys(CAT_LABELS).forEach(cat => { const items = sel.details[cat]; if (items && items.length > 0) { const catTot = sel.catTotals ? sel.catTotals[cat] : items.reduce((s, i) => s + App.calcAmount(i.amount), 0); html += `<div><div class="flex justify-between items-center text-sm font-bold text-gray-700 mb-1.5 border-b border-gray-200 pb-1"><span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 ${CAT_LABELS[cat].bg} rounded-sm"></span>${CAT_LABELS[cat].label}</span><span>${App.formatCurrency(catTot)}</span></div><ul class="text-xs text-gray-500 pl-4 space-y-1">`; items.forEach(i => { html += `<li class="flex justify-between items-center"><div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm ${App.getColorForName(i.name)}"></span><span class="truncate">${escapeHTML(i.name)}</span></div><span>${App.formatCurrency(i.amount)}</span></li>`; }); html += `</ul></div>`; } });
+                                Object.keys(CAT_LABELS).forEach(cat => {
+                                    const items = sel.details[cat];
+                                    if (items && items.length > 0) {
+                                        const catTot = sel.catTotals ? sel.catTotals[cat] : items.reduce((s, i) => s + App.calcAmount(i.amount), 0);
+                                        html += `<div><div class="flex justify-between items-center text-sm font-bold text-gray-700 mb-1.5 border-b border-gray-200 pb-1"><span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 ${CAT_LABELS[cat].bg} rounded-sm"></span>${CAT_LABELS[cat].label}</span><span>${App.formatCurrency(catTot)}</span></div><ul class="text-xs text-gray-500 pl-4 space-y-1">`;
+                                        items.forEach(i => { html += `<li class="flex justify-between items-center"><div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm ${App.getColorForName(i.name)}"></span><span class="truncate">${escapeHTML(i.name)}</span></div><span>${App.formatCurrency(i.amount)}</span></li>`; });
+                                        html += `</ul></div>`;
+                                    }
+                                });
                                 html += `</div>`;
                             } else { html += `<p class="text-xs text-gray-400 mt-3 border-t border-gray-200 pt-3">内訳データはありません</p>`; }
-                            html += `</div><div class="flex flex-col gap-4"><div class="${sel.balance < 0 ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200'} rounded-xl p-5 border flex flex-col justify-center h-32"><p class="text-sm ${sel.balance < 0 ? 'text-red-600' : 'text-emerald-700'} font-bold mb-1">月末残高</p><p class="text-3xl font-black ${sel.balance < 0 ? 'text-red-700' : 'text-emerald-800'}">${App.formatCurrency(sel.balance)}</p></div><div class="flex gap-2"><button onclick="App.startHistoryEdit('${sel.id}')" class="flex-1 py-3 bg-white border border-indigo-200 text-indigo-700 font-bold rounded-xl hover:bg-indigo-50 flex items-center justify-center gap-2 shadow-sm transition-colors">${App.getIconHTML('pencil', 18)} 個別編集</button><button onclick="App.requestDelete('history', '${sel.id}', '${escapeHTML(sel.label)}の履歴')" class="flex-1 py-3 bg-white border border-red-200 text-red-600 font-bold rounded-xl hover:bg-red-50 flex items-center justify-center gap-2 shadow-sm transition-colors">${App.getIconHTML('trash-2', 18)} 削除</button></div></div></div>`;
+                            html += `
+                                    </div>
+                                    <div class="flex flex-col gap-4">
+                                        <div class="${sel.balance < 0 ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200'} rounded-xl p-5 border flex flex-col justify-center h-32"><p class="text-sm ${sel.balance < 0 ? 'text-red-600' : 'text-emerald-700'} font-bold mb-1">月末残高</p><p class="text-3xl font-black ${sel.balance < 0 ? 'text-red-700' : 'text-emerald-800'}">${App.formatCurrency(sel.balance)}</p></div>
+                                        <div class="flex gap-2"><button onclick="App.startHistoryEdit('${sel.id}')" class="shrink-0 py-3 bg-white border border-indigo-200 text-indigo-700 font-bold rounded-xl hover:bg-indigo-50 flex items-center justify-center gap-2 shadow-sm transition-colors">${App.getIconHTML('pencil', 18)} 個別編集</button><button onclick="App.requestDelete('history', '${sel.id}', '${escapeHTML(sel.label)}の履歴')" class="shrink-0 py-3 bg-white border border-red-200 text-red-600 font-bold rounded-xl hover:bg-red-50 flex items-center justify-center gap-2 shadow-sm transition-colors">${App.getIconHTML('trash-2', 18)} 削除</button></div>
+                                    </div>
+                                </div>
+                            `;
                         }
                         html += `</div>`;
                     }
-                } else { html += `<div class="bg-white rounded-2xl p-8 border-2 border-gray-100 border-dashed text-center mt-6 shadow-sm"><div class="inline-flex items-center justify-center w-12 h-12 bg-gray-50 rounded-full mb-3 text-gray-400">${App.getIconHTML('bar-chart-3', 28)}</div><p class="text-gray-500 font-bold">グラフの棒をタップすると、ここに内訳の詳細が表示されます</p></div>`; }
-                html += `</div>`; return html;
+                } else {
+                    html += `<div class="bg-white rounded-2xl p-8 border-2 border-gray-100 border-dashed text-center mt-6 shadow-sm"><div class="inline-flex items-center justify-center w-12 h-12 bg-gray-50 rounded-full mb-3 text-gray-400">${App.getIconHTML('bar-chart-3', 28)}</div><p class="text-gray-500 font-bold">グラフの棒をタップすると、ここに内訳の詳細が表示されます</p></div>`;
+                }
+                html += `</div>`;
+                return html;
             },
 
             renderSettings: function() {
@@ -868,8 +1247,21 @@
                         <div>
                             <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 pb-3 border-b border-gray-100">${App.getIconHTML('settings', 24, 'text-gray-600')} データのバックアップ・復元</h2>
                             <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                                <div class="bg-blue-50/50 p-5 rounded-xl border border-blue-100"><h3 class="text-lg font-bold text-blue-800 mb-2 flex items-center gap-2">${App.getIconHTML('download', 24)} バックアップの発行</h3><p class="text-sm text-gray-600 mb-4">現在の全てのデータをテキストファイルとして保存、またはコピペ用にテキスト出力します。</p><div class="flex flex-col sm:flex-row gap-3 mb-4"><button onclick="App.handleDownloadExport()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-lg text-sm transition-colors flex items-center justify-center gap-2 shadow-sm">${App.getIconHTML('download', 20)} ファイルで保存</button><button onclick="App.handleGenerateExport()" class="flex-1 bg-white border-2 border-blue-600 text-blue-600 hover:bg-blue-50 font-bold py-2 px-4 rounded-lg text-sm transition-colors flex items-center justify-center gap-2">${App.getIconHTML('file-text', 20)} テキスト表示</button></div>${App.state.exportData ? `<div class="relative animate-fade-in"><textarea readonly class="w-full h-40 p-3 text-xs font-mono bg-white border border-blue-200 rounded-lg outline-none resize-none shadow-inner text-gray-700 whitespace-pre">${escapeHTML(App.state.exportData)}</textarea><button onclick="App.handleCopy()" class="absolute top-2 right-2 p-2 rounded-md font-bold text-xs flex items-center gap-1 transition-all ${App.state.copySuccess ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'}">${App.state.copySuccess ? `${App.getIconHTML('check', 16)} 完了` : `${App.getIconHTML('copy', 16)} コピー`}</button></div>` : ''}</div>
-                                <div class="bg-emerald-50/50 p-5 rounded-xl border border-emerald-100 flex flex-col"><h3 class="text-lg font-bold text-emerald-800 mb-2 flex items-center gap-2">${App.getIconHTML('upload', 24)} データの復元</h3><p class="text-sm text-gray-600 mb-4">保存したテキストファイルを読み込むか、枠内にテキストを貼り付けて復元します。</p><div class="mb-4"><label class="flex flex-col sm:flex-row items-center justify-center gap-2 w-full bg-white border-2 border-dashed border-emerald-400 rounded-lg p-4 cursor-pointer hover:bg-emerald-50 transition-colors">${App.getIconHTML('file-text', 28, 'text-emerald-500')}<span class="text-sm font-bold text-emerald-700 text-center">ファイルを選択して読込</span><input type="file" accept=".txt" class="hidden" onchange="App.handleFileUpload(this)" /></label></div><div class="flex items-center gap-4 mb-4"><div class="flex-1 h-px bg-emerald-200"></div><span class="text-xs text-emerald-600 font-bold">または</span><div class="flex-1 h-px bg-emerald-200"></div></div><textarea id="import-data-text" oninput="App.state.importData=this.value" placeholder="ここにバックアップテキストを貼り付け" class="w-full h-24 p-3 text-xs font-mono bg-white border border-emerald-200 rounded-lg outline-none resize-y shadow-inner mb-4">${escapeHTML(App.state.importData)}</textarea><div class="flex flex-col gap-3 mt-auto">${App.state.importMsg.text ? `<div class="p-3 rounded-lg text-sm font-bold flex items-start gap-2 animate-fade-in ${App.state.importMsg.isError ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-emerald-100 text-emerald-800 border border-emerald-200'}">${App.getIconHTML(App.state.importMsg.isError ? 'alert-triangle' : 'check-circle-2', 20)}<span>${escapeHTML(App.state.importMsg.text)}</span></div>` : ''}<button onclick="App.handleImportClick()" class="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 text-white font-bold py-3 px-6 rounded-lg text-sm flex items-center justify-center gap-2 shadow-sm">${App.getIconHTML('upload', 20)} 復元を実行する</button></div></div>
+                                <div class="bg-blue-50/50 p-5 rounded-xl border border-blue-100">
+                                    <h3 class="text-lg font-bold text-blue-800 mb-2 flex items-center gap-2">${App.getIconHTML('download', 24)} バックアップの発行</h3><p class="text-sm text-gray-600 mb-4">現在の全てのデータをテキストファイルとして保存、またはコピペ用にテキスト出力します。</p>
+                                    <div class="flex flex-col sm:flex-row gap-3 mb-4"><button onclick="App.handleDownloadExport()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-lg text-sm transition-colors flex items-center justify-center gap-2 shadow-sm">${App.getIconHTML('download', 20)} ファイルで保存</button><button onclick="App.handleGenerateExport()" class="flex-1 bg-white border-2 border-blue-600 text-blue-600 hover:bg-blue-50 font-bold py-2 px-4 rounded-lg text-sm transition-colors flex items-center justify-center gap-2">${App.getIconHTML('file-text', 20)} テキスト表示</button></div>
+                                    ${App.state.exportData ? `<div class="relative animate-fade-in"><textarea readonly class="w-full h-40 p-3 text-xs font-mono bg-white border border-blue-200 rounded-lg outline-none resize-none shadow-inner text-gray-700 whitespace-pre">${escapeHTML(App.state.exportData)}</textarea><button onclick="App.handleCopy()" class="absolute top-2 right-2 p-2 rounded-md font-bold text-xs flex items-center gap-1 transition-all ${App.state.copySuccess ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'}">${App.state.copySuccess ? `${App.getIconHTML('check', 16)} 完了` : `${App.getIconHTML('copy', 16)} コピー`}</button></div>` : ''}
+                                </div>
+                                <div class="bg-emerald-50/50 p-5 rounded-xl border border-emerald-100 flex flex-col">
+                                    <h3 class="text-lg font-bold text-emerald-800 mb-2 flex items-center gap-2">${App.getIconHTML('upload', 24)} データの復元</h3><p class="text-sm text-gray-600 mb-4">保存したテキストファイルを読み込むか、枠内にテキストを貼り付けて復元します。</p>
+                                    <div class="mb-4"><label class="flex flex-col sm:flex-row items-center justify-center gap-2 w-full bg-white border-2 border-dashed border-emerald-400 rounded-lg p-4 cursor-pointer hover:bg-emerald-50 transition-colors">${App.getIconHTML('file-text', 28, 'text-emerald-500')}<span class="text-sm font-bold text-emerald-700 text-center">ファイルを選択して読込</span><input type="file" accept=".txt" class="hidden" onchange="App.handleFileUpload(this)" /></label></div>
+                                    <div class="flex items-center gap-4 mb-4"><div class="flex-1 h-px bg-emerald-200"></div><span class="text-xs text-emerald-600 font-bold">または</span><div class="flex-1 h-px bg-emerald-200"></div></div>
+                                    <textarea id="import-data-text" oninput="App.state.importData=this.value" placeholder="ここにバックアップテキストを貼り付け" class="w-full h-24 p-3 text-xs font-mono bg-white border border-emerald-200 rounded-lg outline-none resize-y shadow-inner mb-4">${escapeHTML(App.state.importData)}</textarea>
+                                    <div class="flex flex-col gap-3 mt-auto">
+                                        ${App.state.importMsg.text ? `<div class="p-3 rounded-lg text-sm font-bold flex items-start gap-2 animate-fade-in ${App.state.importMsg.isError ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-emerald-100 text-emerald-800 border border-emerald-200'}">${App.getIconHTML(App.state.importMsg.isError ? 'alert-triangle' : 'check-circle-2', 20)}<span>${escapeHTML(App.state.importMsg.text)}</span></div>` : ''}
+                                        <button onclick="App.handleImportClick()" class="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 text-white font-bold py-3 px-6 rounded-lg text-sm flex items-center justify-center gap-2 shadow-sm">${App.getIconHTML('upload', 20)} 復元を実行する</button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -930,7 +1322,9 @@
                         `;
                         if (relPays.length > 0) {
                             html += `<div class="space-y-2">`;
-                            relPays.forEach(p => { html += `<div class="flex justify-between items-center bg-white p-3 rounded-xl border border-gray-100 text-sm shadow-sm ${p.isDone ? 'opacity-40 bg-gray-50' : ''}"><div><span class="font-bold block mb-1 ${p.isDone?'line-through':''}">${escapeHTML(p.name)}</span><div class="flex gap-2 text-[10px]">${p.dueDate ? `<span class="bg-gray-50 border px-1.5 py-0.5 rounded text-gray-500 flex items-center gap-1">${App.getIconHTML('calendar', 12)}${p.dueDate}日引落</span>` : ''}${p.isDone ? `<span class="bg-rose-100 text-rose-700 font-bold px-1.5 py-0.5 rounded">済</span>` : ''}</div></div>${App.getDisplayAmountHTML(p.amount, "text-gray-800")}</div>`; });
+                            relPays.forEach(p => {
+                                html += `<div class="flex justify-between items-center bg-white p-3 rounded-xl border border-gray-100 text-sm shadow-sm ${p.isDone ? 'opacity-40 bg-gray-50' : ''}"><div><span class="font-bold block mb-1 ${p.isDone?'line-through':''}">${escapeHTML(p.name)}</span><div class="flex gap-2 text-[10px]">${p.dueDate ? `<span class="bg-gray-50 border px-1.5 py-0.5 rounded text-gray-500 flex items-center gap-1">${App.getIconHTML('calendar', 12)}${p.dueDate}日引落</span>` : ''}${p.isDone ? `<span class="bg-rose-100 text-rose-700 font-bold px-1.5 py-0.5 rounded">済</span>` : ''}</div></div>${App.getDisplayAmountHTML(p.amount, "text-gray-800")}</div>`;
+                            });
                             html += `</div>`;
                         } else { html += `<p class="py-8 text-center text-sm text-gray-500 border border-dashed rounded-xl">引落予定はありません</p>`; }
                         html += `
