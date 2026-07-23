@@ -79,7 +79,7 @@
             'done': 'done_all', 'undo': 'undo', 'refresh': 'refresh', 'payments': 'payments',
             'home': 'home', 'receipt_long': 'receipt_long', 'credit_card': 'credit_card', 'trending_up': 'trending_up',
             'error_outline': 'error_outline', 'savings': 'savings', 'event_note': 'event_note',
-            'auto_awesome': 'auto_awesome', 'calculate': 'calculate'
+            'auto_awesome': 'auto_awesome'
         };
 
         const App = {
@@ -88,7 +88,7 @@
                 chartMode: 'all',
                 accounts: [], wallets: [], incomes: [], payments: [], history: [], 
                 specialPayments: [], memos: [],
-                allocations: [], editAllocationId: null, // ← スマート割り振り管理用
+                allocations: [], editAllocationId: null, // 割り振り指示用のデータ
                 expandedPayIds: new Set(), editMode: null, deleteTarget: null,
                 selectedAccountPopup: null, preSaveModal: null, showAutoSaveModal: false,
                 confirmImportData: null, showSuccessModal: false, showBackupErrorModal: false,
@@ -184,7 +184,12 @@
                 App.state.history = App.safeLoadArray([STORAGE_KEY + 'history', 'mpm_vanilla_v7_history']);
                 App.state.specialPayments = App.safeLoadArray([STORAGE_KEY + 'specialPayments', 'mpm_vanilla_v7_specialPayments']);
                 App.state.memos = App.safeLoadArray([STORAGE_KEY + 'memos', 'mpm_vanilla_v7_memos']);
+                
+                // 割り振りデータのロード。古い形式（incomeIdがない）場合は互換性エラーを防ぐためクリア
                 App.state.allocations = App.safeLoadArray([STORAGE_KEY + 'allocations']) || [];
+                if (App.state.allocations.length > 0 && App.state.allocations[0].incomeId === undefined) {
+                    App.state.allocations = [];
+                }
 
                 App.state.saveMonthStr = App.getCurrentMonthStr();
                 App.state.manualHistoryMonth = App.getPreviousMonthStr();
@@ -209,16 +214,26 @@
                 let activeWalletsOutgo = 0;
                 let activeIncomesList = 0, totalIncomesList = 0;
                 let activePayments = 0, totalPaymentsNum = 0;
+                let totalAccountShortage = 0; // 各口座の不足額の合計
                 
                 const catTotals = { loan: 0, fixed: 0, variable: 0, investment: 0 };
                 const allCatTotals = { loan: 0, fixed: 0, variable: 0, investment: 0 };
 
                 s.accounts.forEach(a => {
-                    totalAccountsNum += App.calcAmount(a.amount);
+                    const currentBal = App.calcAmount(a.amount);
+                    totalAccountsNum += currentBal;
                     const inc = App.calcAmount(a.incomingAmount);
                     totalAccountIncomes += inc;
                     if (!a.isIncomingDone) activeAccountIncomes += inc;
+                    
+                    // 各口座の引落不足額を計算 (割り振りを考慮しない純粋な不足額)
+                    const relPays = s.payments.filter(p => p.accountId === a.id && !p.isDone);
+                    const totalOut = relPays.reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
+                    if (currentBal - totalOut < 0) {
+                        totalAccountShortage += Math.abs(currentBal - totalOut);
+                    }
                 });
+
                 s.wallets.forEach(w => {
                     totalWalletsNum += App.calcAmount(w.amount);
                     if (!w.isOutgoDone) activeWalletsOutgo += App.calcAmount(w.outgoAmount);
@@ -299,17 +314,22 @@
                     totalAccountsNum, totalWalletsNum, activeAccountIncomes, totalAccountIncomes, 
                     activeWalletsOutgo, activeIncomesList, totalIncomesList, remainingIncomes, 
                     activePayments, totalPaymentsNum, catTotals, allCatTotals, activeFinalBalance, calculatedEndBalance,
-                    totalSpecialAmt, totalMonthlyRequired, currentMonthSpecialAmt
+                    totalSpecialAmt, totalMonthlyRequired, currentMonthSpecialAmt,
+                    totalAccountShortage 
                 };
             },
 
-            // --- スマート割り振り機能（AI追加） ---
             executeAutoAllocation: function() {
                 App.calculateTotals();
                 let allocations = [];
-                let totalIncomeAvailable = App.totals.activeIncomesList; // 未済の入金予定
+                
+                // 未済の入金（給与など）を利用可能なリソースとしてリスト化
+                let availableIncomes = App.state.incomes.filter(i => !i.isDone).map(i => ({
+                    id: i.id,
+                    remain: App.calcAmount(i.amount)
+                }));
 
-                // 1. 各口座の不足分を1000円単位切り上げで計算
+                // 1. 各口座の不足分を計算し、1000円単位切り上げで補填
                 App.state.accounts.forEach(acc => {
                     const relPays = App.state.payments.filter(p => p.accountId === acc.id && !p.isDone);
                     const totalOut = relPays.reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
@@ -317,15 +337,29 @@
                     const expectedBal = currentBal - totalOut;
 
                     if (expectedBal < 0) {
-                        const shortage = Math.abs(expectedBal);
-                        const fillAmount = Math.ceil(shortage / 1000) * 1000; // 1000円単位切り上げ
-                        allocations.push({ id: Date.now() + Math.random(), accountId: acc.id, amount: fillAmount });
-                        totalIncomeAvailable -= fillAmount;
+                        let fillAmount = Math.ceil(Math.abs(expectedBal) / 1000) * 1000;
+
+                        // 利用可能な入金から順番に充当していく
+                        for (let inc of availableIncomes) {
+                            if (fillAmount <= 0) break;
+                            if (inc.remain <= 0) continue;
+
+                            let allocAmt = Math.min(fillAmount, inc.remain);
+                            allocations.push({
+                                id: Date.now() + Math.random(),
+                                incomeId: inc.id,
+                                accountId: acc.id,
+                                amount: String(allocAmt)
+                            });
+                            inc.remain -= allocAmt;
+                            fillAmount -= allocAmt;
+                        }
                     }
                 });
 
-                // 2. 余剰金を特定口座へ全額割り振り
-                if (totalIncomeAvailable > 0) {
+                // 2. 余剰金を特定の手数料無料口座へ全額割り振り
+                let totalRemain = availableIncomes.reduce((s, inc) => s + inc.remain, 0);
+                if (totalRemain > 0) {
                     const targetNames = ['三井住友 鳳', '三井住友銀行 鳳', 'JA', '大信', '大阪信用金庫'];
                     let targetAcc = null;
                     for (let name of targetNames) {
@@ -333,7 +367,17 @@
                         if (targetAcc) break;
                     }
                     if (targetAcc) {
-                        allocations.push({ id: Date.now() + Math.random(), accountId: targetAcc.id, amount: totalIncomeAvailable });
+                        for (let inc of availableIncomes) {
+                            if (inc.remain > 0) {
+                                allocations.push({
+                                    id: Date.now() + Math.random(),
+                                    incomeId: inc.id,
+                                    accountId: targetAcc.id,
+                                    amount: String(inc.remain)
+                                });
+                                inc.remain = 0;
+                            }
+                        }
                     }
                 }
 
@@ -342,35 +386,67 @@
                 App.saveData();
                 App.render();
             },
+            
             syncAllocationsToAccounts: function() {
-                // allocationsの計算結果を対象口座の incomingAmount に連動・合算させる
+                // 割り振りの結果を口座の入金予定額(incomingAmount)に合算して反映する
                 App.state.accounts.forEach(a => {
                     const accAllocs = App.state.allocations.filter(al => al.accountId === a.id);
                     if (accAllocs.length > 0) {
                         const sum = accAllocs.reduce((s, al) => s + App.calcAmount(al.amount), 0);
                         a.incomingAmount = String(sum);
                     } else {
-                        a.incomingAmount = ''; // 割り振りがなければクリア
+                        a.incomingAmount = ''; 
                     }
                 });
             },
+            
+            addAllocation: function(incomeId) {
+                if (App.state.accounts.length === 0) {
+                    alert('先に「口座と現金」タブから口座を登録してください。'); return;
+                }
+                const newId = Date.now() + Math.random();
+                App.state.allocations.push({
+                    id: newId, incomeId: incomeId, accountId: App.state.accounts[0].id, amount: ""
+                });
+                App.state.editAllocationId = newId;
+                App.render();
+            },
+            
             startEditAllocation: function(id) { App.state.editAllocationId = id; App.render(); },
-            saveEditAllocation: function(e, id) {
+            
+            saveEditAllocation: function(e, allocId, incomeId) {
                 e.preventDefault();
-                const val = e.target.amount.value;
-                App.state.allocations = App.state.allocations.map(a => a.id === id ? { ...a, amount: App.cleanInput(val) } : a);
+                const valStr = e.target.amount.value;
+                const valNum = App.calcAmount(valStr);
+                const accId = Number(e.target.accountId.value);
+                
+                // 超過チェック：その入金（給与等）の元金額をオーバーしていないか
+                const income = App.state.incomes.find(i => i.id === incomeId);
+                if (!income) return;
+                const incAmount = App.calcAmount(income.amount);
+                
+                // 今回編集している以外の割り振り合計を計算
+                const otherAllocs = App.state.allocations.filter(a => a.incomeId === incomeId && a.id !== allocId);
+                const otherSum = otherAllocs.reduce((s, a) => s + App.calcAmount(a.amount), 0);
+                
+                if (otherSum + valNum > incAmount) {
+                    alert('エラー：入金予定額 (' + App.formatCurrency(incAmount) + ') を超過しています！\n金額を減らすか、他の割り振りを削除してください。');
+                    return;
+                }
+
+                App.state.allocations = App.state.allocations.map(a => a.id === allocId ? { ...a, accountId: accId, amount: valStr } : a);
                 App.state.editAllocationId = null;
                 App.syncAllocationsToAccounts();
                 App.saveData();
                 App.render();
             },
+            
             deleteAllocation: function(id) {
                 App.state.allocations = App.state.allocations.filter(a => a.id !== id);
                 App.syncAllocationsToAccounts();
                 App.saveData();
                 App.render();
             },
-            // ------------------------------------------
 
             createHistoryDetails: function() {
                 let details = { loan: [], fixed: [], variable: [], investment: [] };
@@ -423,7 +499,6 @@
                 App.render();
             },
             
-            // --- 口座・現金の追加バグ修正 (nullチェック追加) ---
             addAccount: function(e, form) { 
                 e.preventDefault(); 
                 App.state.accounts.push({ 
@@ -449,7 +524,6 @@
                 }); 
                 App.saveData(); App.render(); 
             },
-            // ------------------------------------------
 
             addIncome: function(e, form) { e.preventDefault(); App.state.incomes.push({ id: Date.now(), name: form.incName.value, amount: App.cleanInput(form.incAmount.value), isFixed: form.incIsFixed ? form.incIsFixed.checked : false, isDone: false, memo: form.incMemo ? form.incMemo.value : '' }); App.saveData(); App.render(); },
             addPayment: function(e, form) { e.preventDefault(); App.state.payments.push({ id: Date.now(), name: form.payName.value, amount: App.cleanInput(form.payAmount.value), dueDate: form.payDueDate.value ? Number(form.payDueDate.value) : null, endDate: form.payEndDate.value || '', accountId: form.payAccountId.value ? Number(form.payAccountId.value) : '', category: form.payCat ? form.payCat.value : 'variable', isDone: false, memo: form.payMemo.value, subItems: [] }); App.saveData(); App.render(); },
@@ -491,9 +565,13 @@
 
             startEdit: function(type, id, e) { if (e) e.stopPropagation(); App.state.editMode = { type, id }; App.render(); },
             cancelEdit: function(e) { if (e) e.stopPropagation(); App.state.editMode = null; App.render(); },
+            
             saveEdit: function(e, type, id, paymentId) {
                 e.preventDefault(); const form = e.target;
-                if (type === 'account') App.state.accounts = App.state.accounts.map(a => a.id === id ? { ...a, name: form.name.value, amount: App.cleanInput(form.amount.value), incomingAmount: form.incomingAmount ? App.cleanInput(form.incomingAmount.value) : a.incomingAmount, memo: form.memo ? form.memo.value : '' } : a);
+                if (type === 'account') {
+                    // 口座の編集時は入金予定は手動で上書きさせない
+                    App.state.accounts = App.state.accounts.map(a => a.id === id ? { ...a, name: form.name.value, amount: App.cleanInput(form.amount.value), memo: form.memo ? form.memo.value : '' } : a);
+                }
                 else if (type === 'wallet') App.state.wallets = App.state.wallets.map(w => w.id === id ? { ...w, name: form.name.value, amount: App.cleanInput(form.amount.value), outgoAmount: form.outgoAmount ? App.cleanInput(form.outgoAmount.value) : w.outgoAmount, isOutgoFixed: form.isOutgoFixed ? form.isOutgoFixed.checked : w.isOutgoFixed, memo: form.memo ? form.memo.value : '' } : w);
                 else if (type === 'income') App.state.incomes = App.state.incomes.map(i => i.id === id ? { ...i, name: form.name.value, amount: App.cleanInput(form.amount.value), isFixed: form.isFixed ? form.isFixed.checked : i.isFixed, memo: form.memo ? form.memo.value : '' } : i);
                 else if (type === 'payment') App.state.payments = App.state.payments.map(p => p.id === id ? { ...p, name: form.name.value, amount: App.cleanInput(form.amount.value), dueDate: form.dueDate.value ? Number(form.dueDate.value) : null, endDate: form.endDate ? form.endDate.value : '', accountId: form.accountId.value ? Number(form.accountId.value) : '', category: form.category.value, memo: form.memo ? form.memo.value : '' } : p);
@@ -533,202 +611,13 @@
                 }
             },
 
-            triggerSaveHistory: function() {
-                const monthStr = document.getElementById('manualHistoryMonth').value;
-                if (!monthStr) return;
-                const [year, month] = monthStr.split('-');
-                App.state.preSaveModal = {
-                    id: monthStr, label: `${year.slice(2)}年${parseInt(month, 10)}月`,
-                    payment: App.totals.totalPaymentsNum, balance: App.totals.calculatedEndBalance,
-                    income: App.totals.totalIncomesList,
-                    catTotals: App.totals.allCatTotals,
-                    details: App.createHistoryDetails(),
-                    incomeDetails: App.createIncomeDetails()
-                };
-                App.render();
-            },
-            confirmSaveHistory: function() {
-                const p = App.state.preSaveModal; if (!p) return;
-                const payment = Number(document.getElementById('pre-save-payment').value) || 0;
-                const balance = Number(document.getElementById('pre-save-balance').value) || 0;
-                const income = Number(document.getElementById('pre-save-income').value) || 0;
-                const filtered = App.state.history.filter(h => h.id !== p.id);
-                App.state.history = [...filtered, { id: p.id, label: p.label, payment, balance, income, catTotals: p.catTotals, details: p.details, incomeDetails: p.incomeDetails }].sort((a, b) => a.id.localeCompare(b.id));
-                App.state.preSaveModal = null; App.saveData(); App.render();
-            },
-            
-            startHistoryEdit: function(id) { 
-                const sel = App.state.history.find(h => h.id === id);
-                if (!sel) return;
-                App.state.historyEditMode = id; 
-                let temp = JSON.parse(JSON.stringify(sel));
-                if (!temp.details) {
-                    temp.details = { loan: [], fixed: [], variable: [], investment: [] };
-                    if (temp.catTotals) { Object.keys(temp.catTotals).forEach(cat => { if (temp.catTotals[cat] > 0) temp.details[cat].push({ id: 'old_'+cat, name: CAT_LABELS[cat].label + '合計', amount: temp.catTotals[cat] }); }); } 
-                    else { temp.details.variable.push({ id: 'old_all', name: '過去の支払い合計', amount: temp.payment }); }
-                }
-                if(temp.income === undefined) temp.income = 0;
-                if(!temp.incomeDetails) {
-                    temp.incomeDetails = temp.income > 0 ? [{ id: 'old_inc', name: '過去の収入合計', amount: temp.income }] : [];
-                }
-                App.state.tempHistoryEditData = temp;
-                App.render(); 
-            },
-            cancelHistoryEdit: function() { App.state.historyEditMode = null; App.state.tempHistoryEditData = null; App.render(); },
-            
-            updateTempHistoryDetail: function(cat, itemId, amountStr) {
-                const temp = App.state.tempHistoryEditData;
-                if (!temp || !temp.details || !temp.details[cat]) return;
-                const item = temp.details[cat].find(i => i.id === itemId);
-                if (item) {
-                    item.amount = amountStr;
-                    temp.catTotals = { loan: 0, fixed: 0, variable: 0, investment: 0 };
-                    temp.payment = 0;
-                    Object.keys(temp.details).forEach(c => { temp.details[c].forEach(d => { const a = App.calcAmount(d.amount); temp.catTotals[c] += a; temp.payment += a; }); });
-                }
-                App.render();
-            },
-            updateTempHistoryIncomeDetail: function(itemId, amountStr) {
-                const temp = App.state.tempHistoryEditData;
-                if (!temp || !temp.incomeDetails) return;
-                const item = temp.incomeDetails.find(i => i.id === itemId);
-                if (item) {
-                    item.amount = amountStr;
-                    temp.income = 0;
-                    temp.incomeDetails.forEach(d => { temp.income += App.calcAmount(d.amount); });
-                }
-                App.render();
-            },
-            updateTempHistoryBalance: function(amountStr) { if(App.state.tempHistoryEditData) App.state.tempHistoryEditData.balance = App.calcAmount(amountStr); },
-            updateTempHistoryIncome: function(amountStr) { if(App.state.tempHistoryEditData) App.state.tempHistoryEditData.income = App.calcAmount(amountStr); },
-            
-            saveHistoryEdit: function(e) {
-                e.preventDefault();
-                const id = App.state.historyEditMode; const temp = App.state.tempHistoryEditData; if (!temp) return;
-                const balInput = document.getElementById('edit-hist-balance'); if (balInput) temp.balance = App.calcAmount(balInput.value);
-                const incInput = document.getElementById('edit-hist-income'); if (incInput) temp.income = App.calcAmount(incInput.value);
-                App.state.history = App.state.history.map(h => h.id === id ? temp : h);
-                App.state.historyEditMode = null; App.state.tempHistoryEditData = null; App.saveData(); App.render();
-            },
-
-            safeMemo: function(memo) { return String(memo || '').replace(/,/g, '，').replace(/\n/g, ' '); },
-            generateExportText: function() {
-                let txt = "---支払い管理バックアップ---\n\n【手元現金】\n";
-                App.state.wallets.forEach(w => txt += `${w.id},${w.name},${w.amount||0},${w.outgoAmount||0},${w.isOutgoDone?1:0},${w.isOutgoFixed?1:0},${App.safeMemo(w.memo)}\n`);
-                txt += "\n【口座】\n";
-                App.state.accounts.forEach(a => txt += `${a.id},${a.name},${a.amount||0},${a.incomingAmount||0},${a.isIncomingDone?1:0},${App.safeMemo(a.memo)}\n`);
-                txt += "\n【入金】\n";
-                App.state.incomes.forEach(i => txt += `${i.id},${i.name},${i.amount||0},${i.isFixed?1:0},${i.isDone?1:0},${App.safeMemo(i.memo)}\n`);
-                txt += "\n【支払い】\n";
-                App.state.payments.forEach(p => {
-                    txt += `${p.id},${p.name},${p.amount||0},${p.dueDate||''},${p.accountId||''},${p.category||'variable'},${p.isDone?1:0},${App.safeMemo(p.memo)},${p.endDate||''}\n`;
-                    if (p.subItems && p.subItems.length > 0) p.subItems.forEach(s => { txt += `>${s.id},${s.name},${s.amount||0},${s.category||'variable'},${s.endDate||''},${App.safeMemo(s.memo)}\n`; });
-                });
-                txt += "\n【特別支出】\n";
-                App.state.specialPayments.forEach(sp => { txt += `${sp.id},${sp.name},${sp.amount||0},${sp.targetMonth||''},${sp.isDone?1:0},${App.safeMemo(sp.memo)}\n`; });
-                txt += "\n【メモ】\n";
-                App.state.memos.forEach(m => { txt += `${m.id},${m.title},${m.targetDate||''},${App.safeMemo(m.content)}\n`; });
-                txt += "\n【履歴】\n";
-                App.state.history.forEach(h => {
-                    const detailsBase64 = h.details ? btoa(unescape(encodeURIComponent(JSON.stringify(h.details)))) : '';
-                    const incomeDetailsBase64 = h.incomeDetails ? btoa(unescape(encodeURIComponent(JSON.stringify(h.incomeDetails)))) : '';
-                    txt += `${h.id},${h.label},${h.payment},${h.balance},${h.catTotals?.loan||0},${h.catTotals?.fixed||0},${h.catTotals?.variable||0},${h.catTotals?.investment||0},${detailsBase64},${h.income||0},${incomeDetailsBase64}\n`;
-                });
-                return txt;
-            },
-            handleGenerateExport: function() { try { App.state.exportData = App.generateExportText(); App.state.copySuccess = false; App.state.importMsg = { text: '', isError: false }; App.render(); } catch (e) { App.state.importMsg = { text: '出力エラー', isError: true }; App.render(); } },
-            handleDownloadExport: function() {
-                try {
-                    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([App.generateExportText()], { type: 'text/plain' }));
-                    const d = new Date(); a.download = `payment_backup_${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}.txt`;
-                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                } catch (e) { alert('ファイル保存に失敗しました。'); }
-            },
-            handleCopy: function() {
-                if (!App.state.exportData) return;
-                const fallbackCopy = () => { const ta = document.createElement("textarea"); ta.value = App.state.exportData; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); App.state.copySuccess = true; App.render(); setTimeout(() => {App.state.copySuccess = false; App.render();}, 3000); } catch (err) {} document.body.removeChild(ta); };
-                if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(App.state.exportData).then(() => { App.state.copySuccess = true; App.render(); setTimeout(() => {App.state.copySuccess = false; App.render();}, 3000); }).catch(fallbackCopy); } else { fallbackCopy(); }
-            },
-            handleFileUpload: function(input) {
-                const file = input.files[0]; if (!file) return; const reader = new FileReader();
-                reader.onload = (ev) => { App.state.importData = ev.target.result; App.state.importMsg = { text: 'ファイルを読み込みました。「復元を実行」を押してください。', isError: false }; App.render(); };
-                reader.readAsText(file); input.value = null;
-            },
-            handleImportClick: function() {
-                const text = document.getElementById('import-data-text').value;
-                if (!text || !text.trim()) { App.state.importMsg = { text: 'データを入力するかファイルを選択してください。', isError: true }; App.render(); return; }
-                try {
-                    const lines = text.replace(/，/g, ',').replace(/[０-９]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0)).split('\n');
-                    let mode = ''; const nA = [], nW = [], nI = [], nP = [], nH = [], nSP = [], nM = []; let currP = null;
-                    for(let i=0; i<lines.length; i++) {
-                        let line = lines[i].trim(); if (!line || line.startsWith('---')) continue; if (line.startsWith('【')) { mode = line; continue; }
-                        const pts = line.split(',');
-                        if (mode === '【口座】' && pts.length >= 3) {
-                            let incAmt = ''; let isIncDone = false; let memo = '';
-                            if (pts.length === 4) { memo = pts[3]; } else if (pts.length === 5) { incAmt = pts[3]; memo = pts[4]; } else if (pts.length >= 6) { incAmt = pts[3]; isIncDone = pts[4] === '1'; memo = pts.slice(5).join(','); }
-                            nA.push({ id: Number(pts[0]), name: pts[1], amount: pts[2], incomingAmount: incAmt, isIncomingDone: isIncDone, memo: memo });
-                        }
-                        else if (mode === '【手元現金】' && pts.length >= 3) { nW.push({ id: Number(pts[0]), name: pts[1], amount: pts[2], outgoAmount: pts[3] || '', isOutgoDone: pts[4] === '1', isOutgoFixed: pts[5] === '1', memo: pts.slice(6).join(',') }); }
-                        else if (mode === '【入金】' && pts.length >= 3) {
-                            let isFixed = false; let isDone = false; let memo = '';
-                            if (pts.length === 4) { memo = pts[3]; } else if (pts.length === 5) { isFixed = pts[3] === '1'; memo = pts[4]; } else if (pts.length >= 6) { isFixed = pts[3] === '1'; isDone = pts[4] === '1'; memo = pts.slice(5).join(','); }
-                            nI.push({ id: Number(pts[0]), name: pts[1], amount: pts[2], isFixed: isFixed, isDone: isDone, memo: memo });
-                        }
-                        else if (mode === '【支払い】') {
-                            if (line.startsWith('>') && currP && pts.length >= 4) {
-                                let cat = 'variable'; let endDate = ''; let memo = '';
-                                if (pts.length === 6) { cat = (pts[3] === '1' || pts[3] === '0') ? (pts[3]==='1'?'fixed':'variable') : pts[3]; endDate = pts[4]; memo = pts[5]; } 
-                                else if (pts.length >= 7) { cat = (pts[3] === '1' || pts[3] === '0') ? (pts[3]==='1'?'fixed':'variable') : pts[3]; endDate = pts[4]; memo = pts.slice(5).join(','); }
-                                currP.subItems.push({ id: Number(pts[0].substring(1)), name: pts[1], amount: pts[2], category: cat, endDate: endDate, memo: memo });
-                            }
-                            else if (pts.length >= 3) {
-                                let dueDate = pts[3] ? Number(pts[3]) : null; let accountId = pts[4] ? Number(pts[4]) : ''; let cat = 'variable'; let isDone = false; let memo = ''; let endDate = '';
-                                if (pts.length === 6) { memo = pts[5]; } else if (pts.length === 7) { cat = pts[5] === '1' ? 'fixed' : 'variable'; memo = pts[6]; } else if (pts.length >= 8) { cat = (pts[5] === '1' || pts[5] === '0') ? (pts[5]==='1'?'fixed':'variable') : pts[5]; isDone = pts[6] === '1'; memo = pts[7]; }
-                                if (pts.length >= 9) { endDate = pts[8]; memo = pts.slice(7, -1).join(','); } else { memo = pts.slice(7).join(','); } 
-                                currP = { id: Number(pts[0]), name: pts[1], amount: pts[2], dueDate: dueDate, endDate: endDate, accountId: accountId, category: cat, isDone: isDone, memo: memo, subItems: [] };
-                                nP.push(currP);
-                            }
-                        } else if (mode === '【特別支出】' && pts.length >= 3) {
-                            nSP.push({ id: Number(pts[0]), name: pts[1], amount: pts[2], targetMonth: pts[3]||'', isDone: pts[4]==='1', memo: pts.slice(5).join(',') });
-                        } else if (mode === '【メモ】' && pts.length >= 3) {
-                            nM.push({ id: Number(pts[0]), title: pts[1], targetDate: pts[2]||'', content: pts.slice(3).join(',') });
-                        } else if (mode === '【履歴】' && pts.length >= 4) {
-                            let catTotals = null; let details = null; let income = 0; let incomeDetails = null;
-                            if (pts.length >= 8) { catTotals = { loan: Number(pts[4])||0, fixed: Number(pts[5])||0, variable: Number(pts[6])||0, investment: Number(pts[7])||0 }; if (catTotals.loan === 0 && catTotals.fixed === 0 && catTotals.variable === 0 && catTotals.investment === 0) catTotals = null; }
-                            if (pts.length >= 9 && pts[8]) { try { details = JSON.parse(decodeURIComponent(escape(atob(pts[8])))); } catch(e) {} }
-                            if (pts.length >= 10 && pts[9]) { income = Number(pts[9]) || 0; }
-                            if (pts.length >= 11 && pts[10]) { try { incomeDetails = JSON.parse(decodeURIComponent(escape(atob(pts[10])))); } catch(e) {} }
-                            nH.push({ id: pts[0], label: pts[1], payment: Number(pts[2]), balance: Number(pts[3]), catTotals, details, income, incomeDetails });
-                        }
-                    }
-                    App.state.confirmImportData = { accounts: nA, wallets: nW, incomes: nI, payments: nP, history: nH, specialPayments: nSP, memos: nM }; App.state.importMsg = { text: '', isError: false }; App.render();
-                } catch (e) { App.state.importMsg = { text: 'データの解析に失敗しました。ファイルが正しくない可能性があります。', isError: true }; App.render(); }
-            },
-            executeImport: function() { 
-                const data = App.state.confirmImportData; 
-                if (!data) return; 
-                App.state.accounts = data.accounts; 
-                App.state.wallets = data.wallets; 
-                App.state.incomes = data.incomes; 
-                App.state.payments = data.payments; 
-                App.state.history = data.history; 
-                App.state.specialPayments = data.specialPayments || []; 
-                App.state.memos = data.memos || []; 
-                App.state.importData = ''; 
-                App.state.confirmImportData = null; 
-                App.state.showSuccessModal = true; 
-                App.saveData(); 
-                App.render();
-            },
-
             renderSortButtons: function(type, index, isFirst, isLast) {
                 return `<div class="flex flex-col mr-2 items-center justify-center shrink-0"><button type="button" onclick="App.moveItem('${type}', ${index}, -1, event)" ${isFirst ? 'disabled' : ''} class="p-1.5 ${isFirst ? 'text-gray-200' : 'text-gray-400 hover:bg-gray-100'} rounded">${App.getIconHTML('chevron-up', 20)}</button><button type="button" onclick="App.moveItem('${type}', ${index}, 1, event)" ${isLast ? 'disabled' : ''} class="p-1.5 ${isLast ? 'text-gray-200' : 'text-gray-400 hover:bg-gray-100'} rounded">${App.getIconHTML('chevron-down', 20)}</button></div>`;
             },
             renderCategorySelect: function(name, val) { return `<select name="${name}" class="w-24 px-1 py-1 text-xs border rounded">${Object.entries(CAT_LABELS).map(([k, d]) => `<option value="${k}" ${val === k ? 'selected' : ''}>${d.label}</option>`).join('')}</select>`; },
             renderCategorySelectLg: function(name, val) { return `<select name="${name}" class="flex-1 px-2 py-1.5 text-sm border rounded bg-white font-bold text-gray-700">${Object.entries(CAT_LABELS).map(([k, d]) => `<option value="${k}" ${val === k ? 'selected' : ''}>${d.label}</option>`).join('')}</select>`; },
-            renderAccountSelect: function(name, val) { return `<select name="${name}" class="flex-1 px-2 py-1.5 text-sm border rounded bg-white"><option value="">口座未定</option>${App.state.accounts.map(a => `<option value="${a.id}" ${Number(val) === a.id ? 'selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}</select>`; },
+            renderAccountSelect: function(name, val) { return `<select name="${name}" class="flex-1 px-2 py-1.5 text-sm border rounded bg-white"><option value="">口座未設定</option>${App.state.accounts.map(a => `<option value="${a.id}" ${Number(val) === a.id ? 'selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}</select>`; },
 
-            // --- メイン描画（安全装置付き） ---
             render: function() {
                 try {
                     App.calculateTotals();
@@ -779,7 +668,6 @@
                 }
             },
 
-            // --- サブ描画群 ---
             renderDashboard: function() {
                 const s = App.state;
                 let html = `
@@ -814,16 +702,34 @@
                         html += `
                             <form onsubmit="App.saveEdit(event, 'account', ${item.id})" class="bg-white rounded-lg p-3 shadow-inner border border-blue-200">
                                 <div class="flex gap-2 mb-2"><input name="name" type="text" value="${escapeHTML(item.name)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="口座名" required/><input name="amount" type="text" value="${escapeHTML(item.amount)}" class="w-24 px-2 py-1 text-sm border rounded" placeholder="現在残高"/></div>
-                                <div class="flex gap-2 mb-2"><input name="incomingAmount" type="text" value="${escapeHTML(item.incomingAmount)}" class="w-28 px-2 py-1 text-sm border rounded bg-emerald-50" placeholder="入金予定"/><input name="memo" type="text" value="${escapeHTML(item.memo)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="メモ"/></div>
+                                <div class="flex gap-2 mb-2"><input name="memo" type="text" value="${escapeHTML(item.memo)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="メモ"/></div>
                                 <div class="flex justify-end gap-2"><button type="button" onclick="App.cancelEdit()" class="px-3 py-1 text-xs border rounded bg-gray-50 font-bold text-gray-600">ｷｬﾝｾﾙ</button><button type="submit" class="px-3 py-1 text-xs text-white bg-blue-600 rounded font-bold">保存</button></div>
                             </form>
                         `;
                     } else {
-                        const relPays = s.payments.filter(p => p.accountId === item.id);
-                        const totalOut = relPays.filter(p => !p.isDone).reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
+                        const relPays = s.payments.filter(p => p.accountId === item.id && !p.isDone);
+                        const totalOut = relPays.reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
                         const incAmt = item.isIncomingDone ? 0 : App.calcAmount(item.incomingAmount);
                         const expectedBal = App.calcAmount(item.amount) + incAmt - totalOut;
                         const isShort = expectedBal < 0;
+
+                        // 口座向けの割り振り指示を抽出してバッジHTMLを組み立て
+                        const accAllocs = s.allocations.filter(al => al.accountId === item.id);
+                        let allocsHTML = '';
+                        if (accAllocs.length > 0) {
+                            allocsHTML += `<div class="mt-3 pt-3 border-t border-gray-100 flex flex-col gap-1.5">`;
+                            accAllocs.forEach(al => {
+                                const inc = s.incomes.find(i => i.id === al.incomeId);
+                                const incName = inc ? inc.name : '不明な入金';
+                                allocsHTML += `
+                                    <div class="flex justify-between items-center text-[11px] bg-blue-50 border border-blue-100 text-blue-800 px-2 py-1.5 rounded-md shadow-sm">
+                                        <span class="truncate pr-2 opacity-80">⬅️ ${escapeHTML(incName)} から</span>
+                                        <span class="font-bold shrink-0">+${App.formatCurrency(al.amount)}</span>
+                                    </div>
+                                `;
+                            });
+                            allocsHTML += `</div>`;
+                        }
 
                         html += `
                             <div class="bg-white rounded-lg p-3 shadow-sm border border-gray-100 flex hover:shadow-md cursor-pointer transition-all" onclick="App.openAccountPopup(${item.id})">
@@ -839,9 +745,10 @@
                                     </div>
                                     ${item.memo ? `<div class="text-[10px] text-gray-400 mb-2 truncate">${App.getIconHTML('message-square', 10)} ${escapeHTML(item.memo)}</div>` : ''}
                                     <div class="flex justify-between items-end gap-2">
-                                        <div class="flex-1 min-w-0"><span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">現在残高</span><span class="font-bold text-xl text-gray-800 break-words">${App.formatCurrency(item.amount)}</span>${App.calcAmount(item.incomingAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isIncomingDone ? 'text-gray-400 line-through font-normal' : 'text-emerald-600'}">+${App.getDisplayAmountHTML(item.incomingAmount, "inline-flex flex-row gap-1 items-baseline")}</div>` : ''}</div>
+                                        <div class="flex-1 min-w-0"><span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">現在残高</span><span class="font-bold text-xl text-gray-800 break-words">${App.formatCurrency(item.amount)}</span>${App.calcAmount(item.incomingAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isIncomingDone ? 'text-gray-400 line-through font-normal' : 'text-emerald-600'}">+${App.getDisplayAmountHTML(item.incomingAmount, "inline-flex flex-row gap-1 items-baseline")} (入金予定)</div>` : ''}</div>
                                         ${(totalOut > 0 || incAmt > 0) ? `<div class="flex-1 text-right pl-2 border-l border-gray-100 min-w-0"><span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">引落後予想</span><span class="font-bold text-xl break-words ${isShort ? 'text-red-600' : 'text-emerald-600'}">${isShort ? App.getIconHTML('alert-triangle', 14, 'inline mr-1 mb-0.5') : ''}${App.formatCurrency(expectedBal)}</span></div>` : ''}
                                     </div>
+                                    ${allocsHTML}
                                 </div>
                             </div>
                         `;
@@ -918,67 +825,53 @@
 
             renderIncomes: function() {
                 const s = App.state;
+                const tot = App.totals;
+                const shortage = tot.totalAccountShortage || 0; 
+                const incTotal = tot.activeIncomesList || 0;     
+                const diff = incTotal - shortage;
+                const diffClass = diff < 0 ? 'text-red-600' : 'text-blue-600';
+
                 let html = `
-                    <div class="rounded-2xl p-5 shadow-sm border bg-emerald-50/30 border-emerald-100 animate-fade-in max-w-3xl mx-auto">
+                    <div class="animate-fade-in max-w-3xl mx-auto space-y-6">
                         
-                        <!-- AI独自追加: スマート割り振り(バッジ表示領域) -->
-                        <div class="mb-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200 shadow-sm relative overflow-hidden">
-                            <div class="absolute -right-4 -top-4 opacity-10 pointer-events-none">${App.getIconHTML('auto_awesome', 100)}</div>
-                            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-3 gap-3 relative z-10">
+                        <div class="p-4 bg-white rounded-xl border border-gray-200 shadow-sm relative overflow-hidden">
+                            <div class="absolute -right-4 -top-4 opacity-5 pointer-events-none">${App.getIconHTML('calculate', 100)}</div>
+                            
+                            <div class="flex items-center gap-2 mb-4 border-b pb-3 relative z-10">
+                                ${App.getIconHTML('auto_awesome', 22, 'text-indigo-600')}
                                 <div>
-                                    <h4 class="font-bold text-blue-900 text-[15px] flex items-center gap-1.5">${App.getIconHTML('auto_awesome', 20)} AIスマート割り振り</h4>
-                                    <p class="text-[11px] text-blue-700 mt-1">引落し不足分(千円切上)と余剰金を自動計算し、入金指示を作成します。</p>
+                                    <h4 class="font-bold text-gray-800 text-[15px]">今月の割り振り計算（入金 vs 引落不足）</h4>
+                                    <p class="text-[11px] text-gray-500 mt-0.5">全口座のマイナス（引落し不足分）と、これから入るお金のバランスを確認します。</p>
                                 </div>
-                                <button onclick="App.executeAutoAllocation()" class="w-full sm:w-auto px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow-md transition-colors flex items-center justify-center gap-1.5 shrink-0">
-                                    ${App.getIconHTML('calculate', 18)} 一括割り振りを実行
-                                </button>
                             </div>
                             
-                            <div class="flex flex-wrap gap-2 relative z-10 mt-3 pt-3 border-t border-blue-200/50">
-                `;
-
-                if (s.allocations.length === 0) {
-                    html += `<span class="text-xs text-blue-500/70 font-bold px-1">実行するとここに割り振り指示のバッジが表示されます</span>`;
-                } else {
-                    s.allocations.forEach(al => {
-                        const acc = s.accounts.find(a => a.id === al.accountId);
-                        const accName = acc ? acc.name : '不明な口座';
-                        
-                        if (s.editAllocationId === al.id) {
-                            html += `
-                                <form onsubmit="App.saveEditAllocation(event, ${al.id})" class="flex items-center gap-1.5 bg-white border-2 border-blue-400 p-1.5 rounded-xl shadow-lg animate-zoom-in">
-                                    <span class="text-[11px] font-black text-blue-900 pl-1">${escapeHTML(accName)}</span>
-                                    <input name="amount" type="text" value="${escapeHTML(al.amount)}" class="w-24 px-2 py-1 text-sm font-bold border rounded-lg focus:ring-2 focus:ring-blue-300 outline-none bg-blue-50 text-blue-900" required />
-                                    <button type="submit" class="px-3 py-1 bg-blue-600 text-white text-xs font-bold rounded-lg shadow-sm hover:bg-blue-700">保存</button>
-                                    <button type="button" onclick="App.deleteAllocation(${al.id})" class="p-1.5 text-red-500 hover:bg-red-50 rounded-lg ml-1">${App.getIconHTML('trash-2', 18)}</button>
-                                </form>
-                            `;
-                        } else {
-                            html += `
-                                <div onclick="App.startEditAllocation(${al.id})" class="cursor-pointer flex items-center gap-2 bg-white border border-blue-300 hover:border-blue-500 hover:shadow-md text-blue-900 px-3.5 py-2 rounded-xl transition-all shadow-sm group animate-fade-in">
-                                    <span class="text-xs font-bold flex items-center gap-1 opacity-80">➡️ ${escapeHTML(accName)}へ</span>
-                                    <span class="text-sm font-black">${App.formatCurrency(al.amount)}</span>
-                                    <span class="text-blue-300 group-hover:text-blue-600 ml-0.5 transition-colors">${App.getIconHTML('pencil', 14)}</span>
+                            <div class="grid grid-cols-3 gap-2 mb-5 text-center relative z-10">
+                                <div class="bg-red-50 p-2.5 rounded-lg border border-red-100">
+                                    <div class="text-[10px] font-bold text-red-600 mb-1">各口座の不足額合計</div>
+                                    <div class="font-black text-sm text-red-700">${App.formatCurrency(shortage)}</div>
                                 </div>
-                            `;
-                        }
-                    });
-                }
-
-                html += `
+                                <div class="bg-emerald-50 p-2.5 rounded-lg border border-emerald-100">
+                                    <div class="text-[10px] font-bold text-emerald-600 mb-1">未済の入金予定</div>
+                                    <div class="font-black text-sm text-emerald-700">${App.formatCurrency(incTotal)}</div>
+                                </div>
+                                <div class="${diff < 0 ? 'bg-red-50 border-red-100' : 'bg-blue-50 border-blue-100'} p-2.5 rounded-lg border">
+                                    <div class="text-[10px] font-bold ${diff < 0 ? 'text-red-600' : 'text-blue-600'} mb-1">差引 (余剰/不足)</div>
+                                    <div class="font-black text-sm ${diffClass}">${App.formatCurrency(diff)}</div>
+                                </div>
+                            </div>
+                            
+                            <div class="flex justify-end relative z-10 border-t pt-3">
+                                <button onclick="App.executeAutoAllocation()" class="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-md transition-colors flex items-center justify-center gap-1.5 shrink-0">
+                                    ${App.getIconHTML('calculate', 18)} 自動で各入金から不足口座へ割り振る
+                                </button>
                             </div>
                         </div>
-                        <!-- スマート割り振り 終了 -->
 
-                        <div class="flex items-start sm:items-center justify-between mb-4 gap-2 flex-wrap">
-                            <h3 class="text-lg font-bold flex items-center gap-2 text-emerald-600 shrink-0">${App.getIconHTML('arrow-down-to-line', 24)}入金・預かり予定</h3>
-                            <div class="text-right">
-                                ${App.totals.totalAccountIncomes > 0 ? `<span class="text-[10px] text-emerald-600 font-bold block mb-0.5">口座へ割当済: -${App.formatCurrency(App.totals.totalAccountIncomes)}</span>` : ''}
-                                <span class="text-xs text-gray-500">未済リスト残額:</span> <span class="font-bold text-xl text-emerald-700">${App.formatCurrency(App.totals.remainingIncomes)}</span>
-                            </div>
-                        </div>
-                        <div class="space-y-3 mb-6">
+                        <div class="rounded-2xl p-5 shadow-sm border bg-emerald-50/30 border-emerald-100">
+                            <h3 class="text-lg font-bold flex items-center gap-2 text-emerald-600 mb-4">${App.getIconHTML('arrow-down-to-line', 24)} 入金リストと振込指示</h3>
+                            <div class="space-y-4 mb-6">
                 `;
+                
                 s.incomes.forEach((item, index) => {
                     if (s.editMode && s.editMode.type === 'income' && s.editMode.id === item.id) {
                         html += `
@@ -989,21 +882,75 @@
                             </form>
                         `;
                     } else {
+                        // この入金からの割り振り指示を抽出
+                        const incAllocs = s.allocations.filter(al => al.incomeId === item.id);
+                        const incAmount = App.calcAmount(item.amount);
+                        const allocSum = incAllocs.reduce((sum, al) => sum + App.calcAmount(al.amount), 0);
+                        const remain = incAmount - allocSum;
+                        
+                        let allocsHTML = '';
+                        if (incAllocs.length > 0) {
+                            allocsHTML += `<div class="mt-3 space-y-1.5 border-t border-gray-100 pt-3">`;
+                            incAllocs.forEach(al => {
+                                const acc = s.accounts.find(a => a.id === al.accountId);
+                                const accName = acc ? acc.name : '不明な口座';
+                                
+                                if (s.editAllocationId === al.id) {
+                                    allocsHTML += `
+                                        <form onsubmit="App.saveEditAllocation(event, ${al.id}, ${item.id})" class="flex items-center gap-1 bg-white border border-blue-400 p-1.5 rounded-lg shadow-md animate-zoom-in ml-auto w-[90%] sm:w-[80%]">
+                                            <select name="accountId" class="flex-1 text-[11px] font-bold border border-gray-300 rounded p-1.5 text-gray-700 bg-gray-50">
+                                                ${s.accounts.map(a => `<option value="${a.id}" ${a.id === al.accountId ? 'selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}
+                                            </select>
+                                            <input name="amount" type="text" value="${escapeHTML(al.amount)}" class="w-20 text-[11px] font-bold border border-gray-300 rounded p-1.5" required/>
+                                            <button type="submit" class="px-2.5 py-1.5 bg-blue-600 text-white text-[10px] rounded font-bold">保存</button>
+                                            <button type="button" onclick="App.deleteAllocation(${al.id})" class="p-1.5 text-red-500 hover:bg-red-50 rounded">${App.getIconHTML('trash-2', 14)}</button>
+                                        </form>
+                                    `;
+                                } else {
+                                    allocsHTML += `
+                                        <div onclick="App.startEditAllocation(${al.id})" class="cursor-pointer flex items-center justify-between bg-blue-50/80 border border-blue-200 hover:border-blue-400 text-blue-800 px-2.5 py-1.5 rounded-lg text-[11px] ml-auto w-[90%] sm:w-[70%] transition-all shadow-sm group">
+                                            <span class="truncate opacity-80">➡️ ${escapeHTML(accName)} へ</span>
+                                            <div class="flex items-center gap-1.5 shrink-0">
+                                                <span class="font-bold">${App.formatCurrency(al.amount)}</span>
+                                                <span class="text-blue-400 group-hover:text-blue-600 transition-colors">${App.getIconHTML('pencil', 12)}</span>
+                                            </div>
+                                        </div>
+                                    `;
+                                }
+                            });
+                            allocsHTML += `</div>`;
+                        }
+
+                        allocsHTML += `
+                            <div class="mt-2 flex justify-between items-center text-[10px] ${incAllocs.length === 0 ? 'border-t border-gray-100 pt-2' : ''}">
+                                <button type="button" onclick="App.addAllocation(${item.id})" class="text-indigo-600 font-bold flex items-center hover:bg-indigo-50 px-1.5 py-1 rounded transition-colors border border-transparent hover:border-indigo-100">+ 振込先を追加</button>
+                                <span class="${remain < 0 ? 'text-red-600 font-bold bg-red-50 border border-red-200 px-1.5 py-0.5 rounded shadow-sm' : 'text-gray-500 font-bold'}">未割当: ${App.formatCurrency(remain)}</span>
+                            </div>
+                        `;
+
                         html += `
-                            <div class="flex justify-between items-center bg-white p-3 rounded-lg shadow-sm border border-gray-100 transition-all ${item.isDone ? 'opacity-40 bg-gray-50' : ''}">
-                                <div class="flex items-start flex-1 min-w-0 pr-2">
-                                    ${App.renderSortButtons('income', index, index === 0, index === s.incomes.length - 1)}
-                                    <div class="flex-1 min-w-0 pt-0.5">
-                                        <div class="flex items-center gap-2 flex-wrap"><span class="font-bold text-gray-800 ${item.isDone ? 'line-through text-gray-400' : ''}">${escapeHTML(item.name)}</span>${item.isFixed ? `<span class="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 rounded font-black">固定</span>` : ''}</div>
-                                        ${item.memo ? `<div class="text-[10px] text-gray-400 mt-1 truncate">${App.getIconHTML('message-square', 10)} ${escapeHTML(item.memo)}</div>` : ''}
+                            <div class="bg-white p-3 rounded-xl shadow-sm border border-gray-100 transition-all ${item.isDone ? 'opacity-40 bg-gray-50' : ''}">
+                                <div class="flex justify-between items-start">
+                                    <div class="flex items-start flex-1 min-w-0 pr-2">
+                                        ${App.renderSortButtons('income', index, index === 0, index === s.incomes.length - 1)}
+                                        <div class="flex-1 min-w-0 pt-0.5">
+                                            <div class="flex items-center gap-2 flex-wrap mb-1">
+                                                <span class="font-bold text-gray-800 text-[15px] ${item.isDone ? 'line-through text-gray-400' : ''}">${escapeHTML(item.name)}</span>
+                                                ${item.isFixed ? `<span class="text-[9px] bg-emerald-100 text-emerald-800 px-1.5 rounded font-black">固定</span>` : ''}
+                                            </div>
+                                            ${item.memo ? `<div class="text-[10px] text-gray-400 mt-1 flex items-start gap-1">${App.getIconHTML('message-square', 12, 'shrink-0 mt-0.5')} <span class="truncate">${escapeHTML(item.memo)}</span></div>` : ''}
+                                        </div>
+                                    </div>
+                                    <div class="flex flex-col items-end gap-2 shrink-0">
+                                        ${App.getDisplayAmountHTML(item.amount, `text-[16px] ${item.isDone ? 'text-gray-400' : 'text-emerald-700'}`)}
+                                        <div class="flex gap-1">
+                                            <button type="button" onclick="App.toggleDone('income', ${item.id})" class="p-1.5 rounded transition-colors ${item.isDone ? 'bg-emerald-100 text-emerald-700' : 'text-gray-300 hover:text-emerald-600 hover:bg-gray-50'}">${App.getIconHTML(item.isDone ? 'check-circle-2' : 'done', 20)}</button>
+                                            <button type="button" onclick="App.startEdit('income', ${item.id})" class="text-gray-400 hover:text-blue-500 p-1">${App.getIconHTML('pencil', 20)}</button>
+                                            <button type="button" onclick="App.requestDelete('income', ${item.id}, '${escapeHTML(item.name)}')" class="text-gray-400 hover:text-red-500 p-1">${App.getIconHTML('trash-2', 20)}</button>
+                                        </div>
                                     </div>
                                 </div>
-                                <div class="flex items-center gap-2 shrink-0">
-                                    ${App.getDisplayAmountHTML(item.amount, item.isDone ? 'text-gray-400' : 'text-gray-800')}
-                                    <button type="button" onclick="App.toggleDone('income', ${item.id})" class="p-1.5 rounded transition-colors ${item.isDone ? 'bg-emerald-100 text-emerald-700' : 'text-gray-300 hover:text-emerald-600 hover:bg-gray-50'}">${App.getIconHTML(item.isDone ? 'check-circle-2' : 'done', 20)}</button>
-                                    <button type="button" onclick="App.startEdit('income', ${item.id})" class="text-gray-300 hover:text-blue-500 p-1">${App.getIconHTML('pencil', 20)}</button>
-                                    <button type="button" onclick="App.requestDelete('income', ${item.id}, '${escapeHTML(item.name)}')" class="text-gray-300 hover:text-red-500 p-1">${App.getIconHTML('trash-2', 20)}</button>
-                                </div>
+                                ${allocsHTML}
                             </div>
                         `;
                     }
