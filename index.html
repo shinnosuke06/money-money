@@ -399,7 +399,7 @@
                     }
                 });
             },
-            
+
             addAllocation: function(incomeId) {
                 if (App.state.accounts.length === 0) {
                     alert('先に「口座と現金」タブから口座を登録してください。'); return;
@@ -610,6 +610,221 @@
                     App.state.showBackupErrorModal = true; App.render();
                 }
             },
+
+            // --- 追加・修正された関数ここから ---
+            executeDeleteSubItem: function(paymentId, subId) {
+                if (window.confirm('この内訳を削除しますか？')) {
+                    App.state.payments = App.state.payments.map(p => {
+                        if (p.id === paymentId) {
+                            return { ...p, subItems: (p.subItems || []).filter(s => s.id !== subId) };
+                        }
+                        return p;
+                    });
+                    App.saveData();
+                    App.render();
+                }
+            },
+
+            startHistoryEdit: function(id) {
+                const historyItem = App.state.history.find(h => h.id === id);
+                if (!historyItem) return;
+                App.state.historyEditMode = id;
+                App.state.tempHistoryEditData = JSON.parse(JSON.stringify(historyItem));
+                App.render();
+            },
+            cancelHistoryEdit: function() {
+                App.state.historyEditMode = null;
+                App.state.tempHistoryEditData = null;
+                App.render();
+            },
+            saveHistoryEdit: function(e, id) {
+                e.preventDefault();
+                App.state.history = App.state.history.map(h => h.id === id ? App.state.tempHistoryEditData : h);
+                App.state.historyEditMode = null;
+                App.state.tempHistoryEditData = null;
+                App.saveData();
+                App.render();
+            },
+            updateTempHistoryIncome: function(val) {
+                App.state.tempHistoryEditData.income = Number(val);
+                App.render();
+            },
+            updateTempHistoryBalance: function(val) {
+                App.state.tempHistoryEditData.balance = Number(val);
+                App.render();
+            },
+            updateTempHistoryIncomeDetail: function(id, val) {
+                if(!App.state.tempHistoryEditData.incomeDetails) return;
+                App.state.tempHistoryEditData.incomeDetails = App.state.tempHistoryEditData.incomeDetails.map(d => d.id === id ? {...d, amount: Number(val)} : d);
+                App.state.tempHistoryEditData.income = App.state.tempHistoryEditData.incomeDetails.reduce((sum, d) => sum + d.amount, 0);
+                App.render();
+            },
+            updateTempHistoryDetail: function(cat, id, val) {
+                if(!App.state.tempHistoryEditData.details || !App.state.tempHistoryEditData.details[cat]) return;
+                App.state.tempHistoryEditData.details[cat] = App.state.tempHistoryEditData.details[cat].map(d => d.id === id ? {...d, amount: Number(val)} : d);
+                
+                const catTotal = App.state.tempHistoryEditData.details[cat].reduce((sum, d) => sum + d.amount, 0);
+                if(!App.state.tempHistoryEditData.catTotals) App.state.tempHistoryEditData.catTotals = {};
+                App.state.tempHistoryEditData.catTotals[cat] = catTotal;
+                
+                let totalPayment = 0;
+                Object.values(App.state.tempHistoryEditData.catTotals).forEach(v => totalPayment += v);
+                App.state.tempHistoryEditData.payment = totalPayment;
+                App.render();
+            },
+
+            triggerSaveHistory: function() {
+                App.calculateTotals();
+                const targetMonth = App.state.manualHistoryMonth;
+                if (!targetMonth) {
+                    alert('月を選択してください。');
+                    return;
+                }
+                const [y, m] = targetMonth.split('-');
+                const label = `${y.slice(2)}年${parseInt(m, 10)}月`;
+                
+                App.state.preSaveModal = {
+                    id: targetMonth,
+                    label: label,
+                    income: App.totals.totalIncomesList,
+                    payment: App.totals.totalPaymentsNum,
+                    balance: App.totals.calculatedEndBalance
+                };
+                App.render();
+            },
+            confirmSaveHistory: function() {
+                const modal = App.state.preSaveModal;
+                const incomeInput = document.getElementById('pre-save-income').value;
+                const paymentInput = document.getElementById('pre-save-payment').value;
+                const balanceInput = document.getElementById('pre-save-balance').value;
+
+                const newHistory = {
+                    id: modal.id,
+                    label: modal.label,
+                    income: Number(incomeInput),
+                    payment: Number(paymentInput),
+                    balance: Number(balanceInput),
+                    catTotals: App.totals.allCatTotals,
+                    details: App.createHistoryDetails(),
+                    incomeDetails: App.createIncomeDetails()
+                };
+
+                const existingIndex = App.state.history.findIndex(h => h.id === modal.id);
+                if (existingIndex >= 0) {
+                    App.state.history[existingIndex] = newHistory;
+                } else {
+                    App.state.history.push(newHistory);
+                    App.state.history.sort((a, b) => a.id.localeCompare(b.id));
+                }
+
+                App.state.preSaveModal = null;
+                App.saveData();
+                App.render();
+            },
+
+            generateExportText: function() {
+                const exportObj = {
+                    accounts: App.state.accounts,
+                    wallets: App.state.wallets,
+                    incomes: App.state.incomes,
+                    payments: App.state.payments,
+                    history: App.state.history,
+                    specialPayments: App.state.specialPayments,
+                    memos: App.state.memos,
+                    allocations: App.state.allocations
+                };
+                return JSON.stringify(exportObj, null, 2);
+            },
+            handleDownloadExport: function() {
+                const text = App.generateExportText();
+                const blob = new Blob([text], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; 
+                a.download = `支払管理バックアップ_${new Date().toISOString().slice(0, 10)}.txt`;
+                document.body.appendChild(a); 
+                a.click(); 
+                document.body.removeChild(a); 
+                URL.revokeObjectURL(url);
+            },
+            handleGenerateExport: function() {
+                App.state.exportData = App.generateExportText();
+                App.state.copySuccess = false;
+                App.render();
+            },
+            handleCopy: function() {
+                if (!App.state.exportData) return;
+                try {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = App.state.exportData;
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    document.execCommand("copy");
+                    document.body.removeChild(textArea);
+                    App.state.copySuccess = true;
+                    App.render();
+                    setTimeout(() => {
+                        App.state.copySuccess = false;
+                        App.render();
+                    }, 2000);
+                } catch (e) {
+                    alert("コピーに失敗しました。テキストエリアを選択して手動でコピーしてください。");
+                }
+            },
+
+            handleFileUpload: function(input) {
+                const file = input.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    App.state.importData = e.target.result;
+                    App.render();
+                };
+                reader.readAsText(file);
+            },
+            handleImportClick: function() {
+                if (!App.state.importData || App.state.importData.trim() === '') {
+                    App.state.importMsg = { text: 'データが入力されていません。', isError: true };
+                    App.render();
+                    return;
+                }
+                
+                try {
+                    JSON.parse(App.state.importData);
+                    App.state.importMsg = { text: '', isError: false };
+                    App.state.confirmImportData = true;
+                    App.render();
+                } catch (e) {
+                    App.state.importMsg = { text: 'データの形式が正しくありません。(JSONパースエラー)', isError: true };
+                    App.render();
+                }
+            },
+            executeImport: function() {
+                try {
+                    const data = JSON.parse(App.state.importData);
+                    if(data.accounts) App.state.accounts = data.accounts;
+                    if(data.wallets) App.state.wallets = data.wallets;
+                    if(data.incomes) App.state.incomes = data.incomes;
+                    if(data.payments) App.state.payments = data.payments;
+                    if(data.history) App.state.history = data.history;
+                    if(data.specialPayments) App.state.specialPayments = data.specialPayments;
+                    if(data.memos) App.state.memos = data.memos;
+                    if(data.allocations) App.state.allocations = data.allocations;
+                    
+                    App.saveData();
+                    App.state.confirmImportData = null;
+                    App.state.importData = '';
+                    App.state.importMsg = { text: '', isError: false };
+                    App.state.showSuccessModal = true;
+                    
+                    App.render();
+                } catch(e) {
+                    App.state.confirmImportData = null;
+                    App.state.importMsg = { text: '復元中にエラーが発生しました。', isError: true };
+                    App.render();
+                }
+            },
+            // --- 追加・修正された関数ここまで ---
 
             renderSortButtons: function(type, index, isFirst, isLast) {
                 return `<div class="flex flex-col mr-2 items-center justify-center shrink-0"><button type="button" onclick="App.moveItem('${type}', ${index}, -1, event)" ${isFirst ? 'disabled' : ''} class="p-1.5 ${isFirst ? 'text-gray-200' : 'text-gray-400 hover:bg-gray-100'} rounded">${App.getIconHTML('chevron-up', 20)}</button><button type="button" onclick="App.moveItem('${type}', ${index}, 1, event)" ${isLast ? 'disabled' : ''} class="p-1.5 ${isLast ? 'text-gray-200' : 'text-gray-400 hover:bg-gray-100'} rounded">${App.getIconHTML('chevron-down', 20)}</button></div>`;
