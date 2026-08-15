@@ -399,7 +399,7 @@
                     }
                 });
             },
-
+            
             addAllocation: function(incomeId) {
                 if (App.state.accounts.length === 0) {
                     alert('先に「口座と現金」タブから口座を登録してください。'); return;
@@ -554,6 +554,7 @@
                 else { App.state[t.type + 's'] = App.state[t.type + 's'].filter(item => item.id !== t.id); }
                 App.state.deleteTarget = null; App.saveData(); App.render();
             },
+            
             closeModal: function(modalName) { 
                 App.state[modalName] = null; 
                 if (modalName === 'showAutoSaveModal') App.state.showAutoSaveModal = false; 
@@ -611,25 +612,11 @@
                 }
             },
 
-            // --- 追加・修正された関数ここから ---
-            executeDeleteSubItem: function(paymentId, subId) {
-                if (window.confirm('この内訳を削除しますか？')) {
-                    App.state.payments = App.state.payments.map(p => {
-                        if (p.id === paymentId) {
-                            return { ...p, subItems: (p.subItems || []).filter(s => s.id !== subId) };
-                        }
-                        return p;
-                    });
-                    App.saveData();
-                    App.render();
-                }
-            },
-
+            // --- 新規追加: 履歴の個別編集機能 ---
             startHistoryEdit: function(id) {
-                const historyItem = App.state.history.find(h => h.id === id);
-                if (!historyItem) return;
                 App.state.historyEditMode = id;
-                App.state.tempHistoryEditData = JSON.parse(JSON.stringify(historyItem));
+                const targetHistory = App.state.history.find(h => h.id === id);
+                App.state.tempHistoryEditData = JSON.parse(JSON.stringify(targetHistory));
                 App.render();
             },
             cancelHistoryEdit: function() {
@@ -646,129 +633,195 @@
                 App.render();
             },
             updateTempHistoryIncome: function(val) {
-                App.state.tempHistoryEditData.income = Number(val);
-                App.render();
+                if(App.state.tempHistoryEditData) App.state.tempHistoryEditData.income = Number(val) || 0;
             },
             updateTempHistoryBalance: function(val) {
-                App.state.tempHistoryEditData.balance = Number(val);
-                App.render();
+                if(App.state.tempHistoryEditData) App.state.tempHistoryEditData.balance = Number(val) || 0;
             },
             updateTempHistoryIncomeDetail: function(id, val) {
-                if(!App.state.tempHistoryEditData.incomeDetails) return;
-                App.state.tempHistoryEditData.incomeDetails = App.state.tempHistoryEditData.incomeDetails.map(d => d.id === id ? {...d, amount: Number(val)} : d);
-                App.state.tempHistoryEditData.income = App.state.tempHistoryEditData.incomeDetails.reduce((sum, d) => sum + d.amount, 0);
-                App.render();
+                const temp = App.state.tempHistoryEditData;
+                if (!temp || !temp.incomeDetails) return;
+                const item = temp.incomeDetails.find(i => i.id === id);
+                if (item) {
+                    item.amount = Number(val) || 0;
+                    temp.income = temp.incomeDetails.reduce((sum, i) => sum + i.amount, 0);
+                }
             },
             updateTempHistoryDetail: function(cat, id, val) {
-                if(!App.state.tempHistoryEditData.details || !App.state.tempHistoryEditData.details[cat]) return;
-                App.state.tempHistoryEditData.details[cat] = App.state.tempHistoryEditData.details[cat].map(d => d.id === id ? {...d, amount: Number(val)} : d);
-                
-                const catTotal = App.state.tempHistoryEditData.details[cat].reduce((sum, d) => sum + d.amount, 0);
-                if(!App.state.tempHistoryEditData.catTotals) App.state.tempHistoryEditData.catTotals = {};
-                App.state.tempHistoryEditData.catTotals[cat] = catTotal;
-                
-                let totalPayment = 0;
-                Object.values(App.state.tempHistoryEditData.catTotals).forEach(v => totalPayment += v);
-                App.state.tempHistoryEditData.payment = totalPayment;
-                App.render();
+                const temp = App.state.tempHistoryEditData;
+                if (!temp || !temp.details || !temp.details[cat]) return;
+                const item = temp.details[cat].find(i => i.id === id);
+                if (item) {
+                    item.amount = Number(val) || 0;
+                    temp.catTotals[cat] = temp.details[cat].reduce((sum, i) => sum + i.amount, 0);
+                    temp.payment = Object.values(temp.catTotals).reduce((sum, val) => sum + val, 0);
+                }
             },
 
+            // --- 新規追加: 手動履歴保存機能 ---
             triggerSaveHistory: function() {
-                App.calculateTotals();
-                const targetMonth = App.state.manualHistoryMonth;
-                if (!targetMonth) {
-                    alert('月を選択してください。');
+                const s = App.state;
+                const manualMonth = s.manualHistoryMonth;
+                if (!manualMonth) {
+                    alert('記録する月を選択してください。');
                     return;
                 }
-                const [y, m] = targetMonth.split('-');
+                
+                App.calculateTotals();
+                const [y, m] = manualMonth.split('-');
                 const label = `${y.slice(2)}年${parseInt(m, 10)}月`;
                 
-                App.state.preSaveModal = {
-                    id: targetMonth,
+                s.preSaveModal = {
+                    id: manualMonth,
                     label: label,
-                    income: App.totals.totalIncomesList,
                     payment: App.totals.totalPaymentsNum,
-                    balance: App.totals.calculatedEndBalance
-                };
-                App.render();
-            },
-            confirmSaveHistory: function() {
-                const modal = App.state.preSaveModal;
-                const incomeInput = document.getElementById('pre-save-income').value;
-                const paymentInput = document.getElementById('pre-save-payment').value;
-                const balanceInput = document.getElementById('pre-save-balance').value;
-
-                const newHistory = {
-                    id: modal.id,
-                    label: modal.label,
-                    income: Number(incomeInput),
-                    payment: Number(paymentInput),
-                    balance: Number(balanceInput),
+                    balance: App.totals.calculatedEndBalance,
+                    income: App.totals.totalIncomesList,
                     catTotals: App.totals.allCatTotals,
                     details: App.createHistoryDetails(),
                     incomeDetails: App.createIncomeDetails()
                 };
-
-                const existingIndex = App.state.history.findIndex(h => h.id === modal.id);
-                if (existingIndex >= 0) {
-                    App.state.history[existingIndex] = newHistory;
-                } else {
-                    App.state.history.push(newHistory);
-                    App.state.history.sort((a, b) => a.id.localeCompare(b.id));
+                App.render();
+            },
+            confirmSaveHistory: function() {
+                const s = App.state;
+                const modal = s.preSaveModal;
+                if (!modal) return;
+                
+                const incomeInput = document.getElementById('pre-save-income');
+                const paymentInput = document.getElementById('pre-save-payment');
+                const balanceInput = document.getElementById('pre-save-balance');
+                
+                if (incomeInput && paymentInput && balanceInput) {
+                    modal.income = Number(incomeInput.value) || 0;
+                    modal.payment = Number(paymentInput.value) || 0;
+                    modal.balance = Number(balanceInput.value) || 0;
                 }
-
-                App.state.preSaveModal = null;
+                
+                const existingIndex = s.history.findIndex(h => h.id === modal.id);
+                if (existingIndex >= 0) {
+                    s.history[existingIndex] = modal;
+                } else {
+                    s.history.push(modal);
+                    s.history.sort((a, b) => a.id.localeCompare(b.id));
+                }
+                
+                s.preSaveModal = null;
                 App.saveData();
                 App.render();
             },
 
+            // --- 新規追加: サブアイテム削除機能 ---
+            executeDeleteSubItem: function(paymentId, subId) {
+                App.state.payments = App.state.payments.map(p => {
+                    if (p.id === paymentId) {
+                        return { ...p, subItems: (p.subItems || []).filter(s => s.id !== subId) };
+                    }
+                    return p;
+                });
+                App.saveData();
+                App.render();
+            },
+
+            // --- 新規追加: エクスポート・インポート機能 ---
             generateExportText: function() {
-                const exportObj = {
-                    accounts: App.state.accounts,
-                    wallets: App.state.wallets,
-                    incomes: App.state.incomes,
-                    payments: App.state.payments,
-                    history: App.state.history,
-                    specialPayments: App.state.specialPayments,
-                    memos: App.state.memos,
-                    allocations: App.state.allocations
-                };
-                return JSON.stringify(exportObj, null, 2);
+                const s = App.state;
+                const b64Encode = (str) => btoa(unescape(encodeURIComponent(str)));
+                const b64JSON = (obj) => b64Encode(JSON.stringify(obj));
+
+                let txt = "---支払い管理バックアップ---\n\n";
+                
+                txt += "【手元現金】\n";
+                s.wallets.forEach(w => {
+                    txt += `${w.id},${w.name},${w.amount},${w.outgoAmount || ''},${w.isOutgoDone ? 1 : 0},${w.isOutgoFixed ? 1 : 0},${w.memo || ''}\n`;
+                });
+                
+                txt += "\n【口座】\n";
+                s.accounts.forEach(a => {
+                    txt += `${a.id},${a.name},${a.amount},${a.incomingAmount || ''},${a.isIncomingDone ? 1 : 0},${a.memo || ''}\n`;
+                });
+                
+                txt += "\n【入金】\n";
+                s.incomes.forEach(i => {
+                    txt += `${i.id},${i.name},${i.amount},${i.isFixed ? 1 : 0},${i.isDone ? 1 : 0},${i.memo || ''}\n`;
+                });
+                
+                txt += "\n【支払い】\n";
+                s.payments.forEach(p => {
+                    txt += `${p.id},${p.name},${p.amount},${p.dueDate || ''},${p.accountId || ''},${p.category || ''},${p.isDone ? 1 : 0},${p.memo || ''},${p.endDate || ''}\n`;
+                    if (p.subItems && p.subItems.length > 0) {
+                        p.subItems.forEach(sub => {
+                            txt += `>${sub.id},${sub.name},${sub.amount},${sub.category || ''},${sub.endDate || ''},${sub.memo || ''}\n`;
+                        });
+                    }
+                });
+                
+                txt += "\n【特別支出】\n";
+                s.specialPayments.forEach(sp => {
+                    txt += `${sp.id},${sp.name},${sp.amount},${sp.targetMonth || ''},${sp.isDone ? 1 : 0},${sp.memo || ''}\n`;
+                });
+                
+                txt += "\n【メモ】\n";
+                s.memos.forEach(m => {
+                    txt += `${m.id},${m.title},${m.targetDate || ''},${b64Encode(m.content || '')}\n`;
+                });
+                
+                txt += "\n【履歴】\n";
+                s.history.forEach(h => {
+                    txt += `${h.id},${h.label},${h.payment},${h.balance},${h.catTotals?.loan||0},${h.catTotals?.fixed||0},${h.catTotals?.variable||0},${h.catTotals?.investment||0},${b64JSON(h.details||{})},${h.income||0},${b64JSON(h.incomeDetails||[])}\n`;
+                });
+
+                txt += "\n【割り振り】\n";
+                s.allocations.forEach(al => {
+                    txt += `${al.id},${al.incomeId},${al.accountId},${al.amount}\n`;
+                });
+                
+                return txt;
             },
-            handleDownloadExport: function() {
-                const text = App.generateExportText();
-                const blob = new Blob([text], { type: 'text/plain' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url; 
-                a.download = `支払管理バックアップ_${new Date().toISOString().slice(0, 10)}.txt`;
-                document.body.appendChild(a); 
-                a.click(); 
-                document.body.removeChild(a); 
-                URL.revokeObjectURL(url);
-            },
+
             handleGenerateExport: function() {
                 App.state.exportData = App.generateExportText();
                 App.state.copySuccess = false;
                 App.render();
             },
+
+            handleDownloadExport: function() {
+                const text = App.generateExportText();
+                const blob = new Blob([text], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `支払い管理バックアップ_${App.getCurrentMonthStr()}.txt`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            },
+
             handleCopy: function() {
-                if (!App.state.exportData) return;
-                try {
-                    const textArea = document.createElement("textarea");
-                    textArea.value = App.state.exportData;
-                    document.body.appendChild(textArea);
-                    textArea.select();
-                    document.execCommand("copy");
-                    document.body.removeChild(textArea);
-                    App.state.copySuccess = true;
-                    App.render();
-                    setTimeout(() => {
-                        App.state.copySuccess = false;
+                const text = App.state.exportData;
+                if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(text).then(() => {
+                        App.state.copySuccess = true;
                         App.render();
-                    }, 2000);
-                } catch (e) {
-                    alert("コピーに失敗しました。テキストエリアを選択して手動でコピーしてください。");
+                        setTimeout(() => { App.state.copySuccess = false; App.render(); }, 2000);
+                    });
+                } else {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = text;
+                    textArea.style.position = "fixed";
+                    document.body.appendChild(textArea);
+                    textArea.focus();
+                    textArea.select();
+                    try {
+                        document.execCommand('copy');
+                        App.state.copySuccess = true;
+                        App.render();
+                        setTimeout(() => { App.state.copySuccess = false; App.render(); }, 2000);
+                    } catch (err) {
+                        console.error('コピー失敗', err);
+                    }
+                    document.body.removeChild(textArea);
                 }
             },
 
@@ -776,55 +829,144 @@
                 const file = input.files[0];
                 if (!file) return;
                 const reader = new FileReader();
-                reader.onload = function(e) {
+                reader.onload = (e) => {
                     App.state.importData = e.target.result;
+                    input.value = ''; // 連続で同じファイルを読めるようにリセット
                     App.render();
                 };
                 reader.readAsText(file);
             },
+
             handleImportClick: function() {
-                if (!App.state.importData || App.state.importData.trim() === '') {
-                    App.state.importMsg = { text: 'データが入力されていません。', isError: true };
+                if (!App.state.importData) {
+                    App.state.importMsg = { text: 'データが空です。', isError: true };
                     App.render();
                     return;
                 }
-                
-                try {
-                    JSON.parse(App.state.importData);
-                    App.state.importMsg = { text: '', isError: false };
-                    App.state.confirmImportData = true;
-                    App.render();
-                } catch (e) {
-                    App.state.importMsg = { text: 'データの形式が正しくありません。(JSONパースエラー)', isError: true };
-                    App.render();
-                }
+                App.state.confirmImportData = true;
+                App.render();
             },
+
             executeImport: function() {
                 try {
-                    const data = JSON.parse(App.state.importData);
-                    if(data.accounts) App.state.accounts = data.accounts;
-                    if(data.wallets) App.state.wallets = data.wallets;
-                    if(data.incomes) App.state.incomes = data.incomes;
-                    if(data.payments) App.state.payments = data.payments;
-                    if(data.history) App.state.history = data.history;
-                    if(data.specialPayments) App.state.specialPayments = data.specialPayments;
-                    if(data.memos) App.state.memos = data.memos;
-                    if(data.allocations) App.state.allocations = data.allocations;
+                    const text = App.state.importData;
+                    if (!text || !text.includes('---支払い管理バックアップ---')) {
+                        throw new Error('無効なデータ形式です。「---支払い管理バックアップ---」で始まるテキストをご用意ください。');
+                    }
                     
-                    App.saveData();
-                    App.state.confirmImportData = null;
+                    const lines = text.split('\n');
+                    let currentSection = '';
+                    
+                    const newS = {
+                        wallets: [], accounts: [], incomes: [], payments: [], specialPayments: [], memos: [], history: [], allocations: []
+                    };
+                    
+                    const b64Decode = (str) => {
+                        try { return decodeURIComponent(escape(atob(str))); } catch(e) { return str; }
+                    };
+                    
+                    let currentPayment = null;
+
+                    lines.forEach(line => {
+                        const trimmed = line.trim();
+                        if (!trimmed) return;
+                        if (trimmed.startsWith('【') && trimmed.endsWith('】')) {
+                            currentSection = trimmed;
+                            return;
+                        }
+                        if (trimmed === '---支払い管理バックアップ---') return;
+                        
+                        const isSub = trimmed.startsWith('>');
+                        const rawLine = isSub ? trimmed.substring(1) : trimmed;
+                        const p = rawLine.split(',');
+                        // カンマがメモに含まれる場合の対策（指定インデックス以降を結合）
+                        const getMemo = (parts, startIdx, endIdx) => parts.slice(startIdx, endIdx).join(',');
+
+                        if (currentSection === '【手元現金】') {
+                            newS.wallets.push({
+                                id: Number(p[0]), name: p[1], amount: p[2], outgoAmount: p[3], 
+                                isOutgoDone: p[4] === '1', isOutgoFixed: p[5] === '1', memo: getMemo(p, 6)
+                            });
+                        } else if (currentSection === '【口座】') {
+                            newS.accounts.push({
+                                id: Number(p[0]), name: p[1], amount: p[2], incomingAmount: p[3], 
+                                isIncomingDone: p[4] === '1', memo: getMemo(p, 5)
+                            });
+                        } else if (currentSection === '【入金】') {
+                            newS.incomes.push({
+                                id: Number(p[0]), name: p[1], amount: p[2], 
+                                isFixed: p[3] === '1', isDone: p[4] === '1', memo: getMemo(p, 5)
+                            });
+                        } else if (currentSection === '【支払い】') {
+                            if (!isSub) {
+                                let endDateStr = p[p.length - 1]; // 最後は必ずendDate
+                                let memoStr = getMemo(p, 7, p.length - 1);
+                                currentPayment = {
+                                    id: Number(p[0]), name: p[1], amount: p[2], dueDate: p[3] ? Number(p[3]) : null, 
+                                    accountId: p[4] ? Number(p[4]) : '', category: p[5] || 'variable', isDone: p[6] === '1', 
+                                    memo: memoStr, endDate: endDateStr, subItems: []
+                                };
+                                newS.payments.push(currentPayment);
+                            } else {
+                                let endDateStr = p[4];
+                                let memoStr = getMemo(p, 5);
+                                if (currentPayment) {
+                                    currentPayment.subItems.push({
+                                        id: Number(p[0]), name: p[1], amount: p[2], category: p[3] || 'variable', endDate: endDateStr, memo: memoStr
+                                    });
+                                }
+                            }
+                        } else if (currentSection === '【特別支出】') {
+                            newS.specialPayments.push({
+                                id: Number(p[0]), name: p[1], amount: p[2], targetMonth: p[3], isDone: p[4] === '1', memo: getMemo(p, 5)
+                            });
+                        } else if (currentSection === '【メモ】') {
+                            newS.memos.push({
+                                id: Number(p[0]), title: p[1], targetDate: p[2], content: p[3] ? b64Decode(p[3]) : ''
+                            });
+                        } else if (currentSection === '【履歴】') {
+                            let catTotals = { loan: Number(p[4]), fixed: Number(p[5]), variable: Number(p[6]), investment: Number(p[7]) };
+                            let details = {};
+                            if (p[8]) { try { details = JSON.parse(b64Decode(p[8])); } catch(e){} }
+                            let incomeDetails = [];
+                            if (p[10]) { try { incomeDetails = JSON.parse(b64Decode(p[10])); } catch(e){} }
+                            
+                            newS.history.push({
+                                id: p[0], label: p[1], payment: Number(p[2]), balance: Number(p[3]), 
+                                income: Number(p[9] || 0), catTotals: catTotals, details: details, incomeDetails: incomeDetails
+                            });
+                        } else if (currentSection === '【割り振り】') {
+                            newS.allocations.push({
+                                id: Number(p[0]), incomeId: Number(p[1]), accountId: Number(p[2]), amount: p[3]
+                            });
+                        }
+                    });
+
+                    // 状態を更新
+                    App.state.wallets = newS.wallets;
+                    App.state.accounts = newS.accounts;
+                    App.state.incomes = newS.incomes;
+                    App.state.payments = newS.payments;
+                    App.state.specialPayments = newS.specialPayments;
+                    App.state.memos = newS.memos;
+                    App.state.history = newS.history;
+                    App.state.allocations = newS.allocations;
+
                     App.state.importData = '';
                     App.state.importMsg = { text: '', isError: false };
+                    App.state.confirmImportData = null;
                     App.state.showSuccessModal = true;
                     
+                    App.saveData();
                     App.render();
-                } catch(e) {
+                    
+                } catch (error) {
+                    console.error(error);
                     App.state.confirmImportData = null;
-                    App.state.importMsg = { text: '復元中にエラーが発生しました。', isError: true };
+                    App.state.importMsg = { text: error.message || '復元中にエラーが発生しました。', isError: true };
                     App.render();
                 }
             },
-            // --- 追加・修正された関数ここまで ---
 
             renderSortButtons: function(type, index, isFirst, isLast) {
                 return `<div class="flex flex-col mr-2 items-center justify-center shrink-0"><button type="button" onclick="App.moveItem('${type}', ${index}, -1, event)" ${isFirst ? 'disabled' : ''} class="p-1.5 ${isFirst ? 'text-gray-200' : 'text-gray-400 hover:bg-gray-100'} rounded">${App.getIconHTML('chevron-up', 20)}</button><button type="button" onclick="App.moveItem('${type}', ${index}, 1, event)" ${isLast ? 'disabled' : ''} class="p-1.5 ${isLast ? 'text-gray-200' : 'text-gray-400 hover:bg-gray-100'} rounded">${App.getIconHTML('chevron-down', 20)}</button></div>`;
