@@ -336,7 +336,7 @@
 
                 // 1. 未済の入金
                 App.state.incomes.forEach(i => {
-                    if (!i.isDone) availableSources.push({ type: 'income', id: i.id, remain: App.calcAmount(i.amount) });
+                    if (!i.isDone) availableSources.push({ type: 'income', id: i.id, remain: App.calcAmount(i.amount), defaultAccountId: i.defaultAccountId });
                 });
 
                 // 2. 余剰のある口座
@@ -381,25 +381,17 @@
                 });
 
                 // 余剰金の特定口座への割り振り (入金優先)
-                let totalRemain = availableSources.filter(s => s.type === 'income').reduce((s, src) => s + src.remain, 0);
-                if (totalRemain > 0) {
-                    const targetNames = ['三井住友 鳳', '三井住友銀行 鳳', 'JA', '大信', '大阪信用金庫'];
-                    let targetAcc = null;
-                    for (let name of targetNames) {
-                        targetAcc = App.state.accounts.find(a => a.name.includes(name));
-                        if (targetAcc) break;
-                    }
-                    if (targetAcc) {
-                        for (let src of availableSources) {
-                            if (src.type === 'income' && src.remain > 0) {
-                                allocations.push({
-                                    id: Date.now() + Math.random(),
-                                    sourceType: src.type, sourceId: src.id,
-                                    targetType: 'account', targetId: targetAcc.id,
-                                    amount: String(src.remain)
-                                });
-                                src.remain = 0;
-                            }
+                for (let src of availableSources) {
+                    if (src.type === 'income' && src.remain > 0 && src.defaultAccountId) {
+                        const targetAcc = App.state.accounts.find(a => a.id === src.defaultAccountId);
+                        if (targetAcc) {
+                            allocations.push({
+                                id: Date.now() + Math.random(),
+                                sourceType: src.type, sourceId: src.id,
+                                targetType: 'account', targetId: targetAcc.id,
+                                amount: String(src.remain)
+                            });
+                            src.remain = 0;
                         }
                     }
                 }
@@ -568,9 +560,10 @@
                 App.saveData(); App.render(); 
             },
 
-            addIncome: function(e, form) { e.preventDefault(); App.state.incomes.push({ id: Date.now(), name: form.incName.value, amount: App.cleanInput(form.incAmount.value), isFixed: form.incIsFixed ? form.incIsFixed.checked : false, isDone: false, memo: form.incMemo ? form.incMemo.value : '' }); App.saveData(); App.render(); },
+            addIncome: function(e, form) { e.preventDefault(); App.state.incomes.push({ id: Date.now(), name: form.incName.value, amount: App.cleanInput(form.incAmount.value), defaultAccountId: form.incDefaultAccountId.value ? Number(form.incDefaultAccountId.value) : '', isFixed: form.incIsFixed ? form.incIsFixed.checked : false, isDone: false, memo: form.incMemo ? form.incMemo.value : '' }); App.saveData(); App.render(); },
             addPayment: function(e, form) { e.preventDefault(); App.state.payments.push({ id: Date.now(), name: form.payName.value, amount: App.cleanInput(form.payAmount.value), dueDate: form.payDueDate.value ? Number(form.payDueDate.value) : null, endDate: form.payEndDate.value || '', accountId: form.payAccountId.value ? Number(form.payAccountId.value) : '', category: form.payCat ? form.payCat.value : 'variable', isDone: false, memo: form.payMemo.value, subItems: [] }); App.saveData(); App.render(); },
             addSubItem: function(e, form, paymentId) { e.preventDefault(); const newItem = { id: Date.now(), name: form.subName.value, amount: App.cleanInput(form.subAmount.value), category: form.subCat.value, endDate: form.subEndDate ? form.subEndDate.value : '', memo: form.subMemo.value }; App.state.payments = App.state.payments.map(p => p.id === paymentId ? { ...p, subItems: [...(p.subItems||[]), newItem] } : p); App.saveData(); App.render(); },
+            
             addSpecialPayment: function(e, form) { e.preventDefault(); App.state.specialPayments.push({ id: Date.now(), name: form.spName.value, amount: App.cleanInput(form.spAmount.value), targetMonth: form.spMonth.value, memo: form.spMemo.value, isDone: false }); App.saveData(); App.render(); },
             addMemo: function(e, form) { e.preventDefault(); App.state.memos.push({ id: Date.now(), title: form.mTitle.value, targetDate: form.mDate.value, content: form.mContent.value }); App.state.memos.sort((a,b)=>new Date(a.targetDate) - new Date(b.targetDate)); App.saveData(); App.render(); },
 
@@ -614,7 +607,7 @@
                     App.state.accounts = App.state.accounts.map(a => a.id === id ? { ...a, name: form.name.value, amount: App.cleanInput(form.amount.value), memo: form.memo ? form.memo.value : '' } : a);
                 }
                 else if (type === 'wallet') App.state.wallets = App.state.wallets.map(w => w.id === id ? { ...w, name: form.name.value, amount: App.cleanInput(form.amount.value), outgoAmount: form.outgoAmount ? App.cleanInput(form.outgoAmount.value) : w.outgoAmount, isOutgoFixed: form.isOutgoFixed ? form.isOutgoFixed.checked : w.isOutgoFixed, memo: form.memo ? form.memo.value : '' } : w);
-                else if (type === 'income') App.state.incomes = App.state.incomes.map(i => i.id === id ? { ...i, name: form.name.value, amount: App.cleanInput(form.amount.value), isFixed: form.isFixed ? form.isFixed.checked : i.isFixed, memo: form.memo ? form.memo.value : '' } : i);
+                else if (type === 'income') App.state.incomes = App.state.incomes.map(i => i.id === id ? { ...i, name: form.name.value, amount: App.cleanInput(form.amount.value), defaultAccountId: form.defaultAccountId.value ? Number(form.defaultAccountId.value) : '', isFixed: form.isFixed ? form.isFixed.checked : i.isFixed, memo: form.memo ? form.memo.value : '' } : i);
                 else if (type === 'payment') App.state.payments = App.state.payments.map(p => p.id === id ? { ...p, name: form.name.value, amount: App.cleanInput(form.amount.value), dueDate: form.dueDate.value ? Number(form.dueDate.value) : null, endDate: form.endDate ? form.endDate.value : '', accountId: form.accountId.value ? Number(form.accountId.value) : '', category: form.category.value, memo: form.memo ? form.memo.value : '' } : p);
                 else if (type === 'subItem') App.state.payments = App.state.payments.map(p => { if (p.id === paymentId) { return { ...p, subItems: p.subItems.map(s => s.id === id ? { ...s, name: form.name.value, amount: App.cleanInput(form.amount.value), category: form.category.value, endDate: form.endDate ? form.endDate.value : '', memo: form.memo ? form.memo.value : '' } : s) }; } return p; });
                 else if (type === 'special') App.state.specialPayments = App.state.specialPayments.map(sp => sp.id === id ? { ...sp, name: form.name.value, amount: App.cleanInput(form.amount.value), targetMonth: form.targetMonth.value, memo: form.memo ? form.memo.value : '' } : sp);
@@ -1185,8 +1178,17 @@
                     if (s.editMode && s.editMode.type === 'income' && s.editMode.id === item.id) {
                         html += `
                             <form onsubmit="App.saveEdit(event, 'income', ${item.id})" class="bg-white rounded-lg p-3 shadow-inner border border-emerald-200">
-                                <div class="flex gap-2 mb-2"><input name="name" type="text" value="${escapeHTML(item.name)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="項目名" required/><input name="amount" type="text" value="${escapeHTML(item.amount)}" class="w-24 px-2 py-1 text-sm border rounded" placeholder="金額"/></div>
-                                <div class="flex gap-2 mb-2"><input name="memo" type="text" value="${escapeHTML(item.memo)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="メモ"/></div>
+                                <div class="flex gap-2 mb-2">
+                                    <input name="name" type="text" value="${escapeHTML(item.name)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="項目名" required/>
+                                    <input name="amount" type="text" value="${escapeHTML(item.amount)}" class="w-24 px-2 py-1 text-sm border rounded" placeholder="金額"/>
+                                </div>
+                                <div class="flex gap-2 mb-2">
+                                    <select name="defaultAccountId" class="w-32 px-1 py-1 text-xs border rounded bg-gray-50 text-gray-700 font-bold">
+                                        <option value="">優先先: 設定なし</option>
+                                        ${s.accounts.map(a => `<option value="${a.id}" ${item.defaultAccountId === a.id ? 'selected' : ''}>先: ${escapeHTML(a.name)}</option>`).join('')}
+                                    </select>
+                                    <input name="memo" type="text" value="${escapeHTML(item.memo)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="メモ"/>
+                                </div>
                                 <div class="flex justify-between items-center"><label class="text-[11px] font-bold text-emerald-800 flex items-center gap-1"><input name="isFixed" type="checkbox" ${item.isFixed ? 'checked' : ''}/>毎月固定</label><div class="flex gap-2"><button type="button" onclick="App.cancelEdit()" class="px-3 py-1 text-xs border rounded bg-gray-50 font-bold text-gray-600">ｷｬﾝｾﾙ</button><button type="submit" class="px-3 py-1 text-xs text-white bg-emerald-600 rounded font-bold">保存</button></div></div>
                             </form>
                         `;
@@ -1194,6 +1196,7 @@
                         const allocSum = s.allocations.filter(a => a.sourceType === 'income' && a.sourceId === item.id).reduce((sum, a) => sum + App.calcAmount(a.amount), 0);
                         const remainAmount = App.calcAmount(item.amount) - allocSum;
                         const allocsHTML = App.renderAllocations('income', item.id, remainAmount);
+                        const defaultAccName = item.defaultAccountId ? (s.accounts.find(a=>a.id === item.defaultAccountId)||{}).name : null;
 
                         html += `
                             <div class="bg-white p-3 rounded-xl shadow-sm border border-gray-100 transition-all ${item.isDone ? 'opacity-40 bg-gray-50' : ''}">
@@ -1204,6 +1207,7 @@
                                             <div class="flex items-center gap-2 flex-wrap mb-1">
                                                 <span class="font-bold text-gray-800 text-[15px] ${item.isDone ? 'line-through text-gray-400' : ''}">${escapeHTML(item.name)}</span>
                                                 ${item.isFixed ? `<span class="text-[9px] bg-emerald-100 text-emerald-800 px-1.5 rounded font-black">固定</span>` : ''}
+                                                ${defaultAccName ? `<span class="text-[9px] bg-blue-50 border border-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold flex items-center gap-0.5 truncate max-w-[100px]">${App.getIconHTML('building-2', 10)} ${escapeHTML(defaultAccName)}</span>` : ''}
                                             </div>
                                             ${item.memo ? `<div class="text-[10px] text-gray-400 mt-1 flex items-start gap-1">${App.getIconHTML('message-square', 12, 'shrink-0 mt-0.5')} <span class="truncate">${escapeHTML(item.memo)}</span></div>` : ''}
                                         </div>
@@ -1224,11 +1228,17 @@
                 });
                 html += `
                         </div>
-                        <form onsubmit="App.addIncome(event, this)" class="bg-white p-3 rounded-xl border shadow-sm flex flex-col sm:flex-row gap-2">
-                            <input name="incName" type="text" placeholder="項目名" required class="flex-1 w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"/>
-                            <div class="flex gap-2 w-full sm:w-auto">
-                                <input name="incAmount" type="text" placeholder="金額" required class="flex-1 w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"/>
-                                <button type="submit" class="px-4 py-2 bg-emerald-500 text-white font-bold rounded-lg hover:bg-emerald-600 flex items-center justify-center shrink-0 transition-colors">${App.getIconHTML('plus', 18)}</button>
+                        <form onsubmit="App.addIncome(event, this)" class="bg-white p-3 rounded-xl border shadow-sm flex flex-col gap-2">
+                            <div class="flex flex-col sm:flex-row gap-2">
+                                <input name="incName" type="text" placeholder="項目名" required class="flex-1 px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"/>
+                                <input name="incAmount" type="text" placeholder="金額" required class="w-full sm:w-32 px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"/>
+                            </div>
+                            <div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
+                                <select name="incDefaultAccountId" class="w-full sm:w-48 px-2 py-2 text-sm border rounded-lg bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-200 text-gray-600 font-bold">
+                                    <option value="">優先振込先: (設定なし)</option>
+                                    ${s.accounts.map(a => `<option value="${a.id}">先: ${escapeHTML(a.name)}</option>`).join('')}
+                                </select>
+                                <button type="submit" class="flex-1 sm:flex-none px-6 py-2 bg-emerald-500 text-white font-bold rounded-lg hover:bg-emerald-600 flex items-center justify-center gap-1 transition-colors">${App.getIconHTML('plus', 18)} 追加</button>
                             </div>
                         </form>
                     </div>
