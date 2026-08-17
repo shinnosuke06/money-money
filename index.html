@@ -185,22 +185,20 @@
                 App.state.specialPayments = App.safeLoadArray([STORAGE_KEY + 'specialPayments', 'mpm_vanilla_v7_specialPayments']);
                 App.state.memos = App.safeLoadArray([STORAGE_KEY + 'memos', 'mpm_vanilla_v7_memos']);
                 
-                // 割り振りデータのロード (新構造へのマイグレーション含む)
-                const loadedAllocations = App.safeLoadArray([STORAGE_KEY + 'allocations']) || [];
-                App.state.allocations = loadedAllocations.map(a => {
-                    if (a.sourceType) return a;
-                    if (a.incomeId !== undefined) {
-                        return {
-                            id: a.id,
-                            sourceType: 'income',
-                            sourceId: a.incomeId,
-                            targetType: 'account',
-                            targetId: a.accountId,
-                            amount: String(a.amount)
-                        };
+                // 割り振りデータのロード。古い形式（incomeIdがない）場合は互換性エラーを防ぐためクリア
+                App.state.allocations = App.safeLoadArray([STORAGE_KEY + 'allocations']) || [];
+                if (App.state.allocations.length > 0 && App.state.allocations[0].incomeId === undefined && App.state.allocations[0].sourceType === undefined) {
+                    App.state.allocations = [];
+                }
+
+                // 入金のdefaultTargetマイグレーション
+                App.state.incomes = App.state.incomes.map(i => {
+                    let dt = i.defaultTarget;
+                    if (dt === undefined && i.defaultAccountId) {
+                        dt = 'account_' + i.defaultAccountId;
                     }
-                    return null;
-                }).filter(Boolean);
+                    return { ...i, defaultTarget: dt || '' };
+                });
 
                 App.state.saveMonthStr = App.getCurrentMonthStr();
                 App.state.manualHistoryMonth = App.getPreviousMonthStr();
@@ -221,7 +219,7 @@
             calculateTotals: function() {
                 const s = App.state;
                 let totalAccountsNum = 0, totalWalletsNum = 0;
-                let activeAccountIncomes = 0, totalAccountIncomes = 0;
+                let activeTargetIncomes = 0, totalAccountIncomes = 0;
                 let activeWalletsOutgo = 0;
                 let activeIncomesList = 0, totalIncomesList = 0;
                 let activePayments = 0, totalPaymentsNum = 0;
@@ -235,7 +233,7 @@
                     totalAccountsNum += currentBal;
                     const inc = App.calcAmount(a.incomingAmount);
                     totalAccountIncomes += inc;
-                    if (!a.isIncomingDone) activeAccountIncomes += inc;
+                    if (!a.isIncomingDone) activeTargetIncomes += inc;
                     
                     const relPays = s.payments.filter(p => p.accountId === a.id && !p.isDone);
                     const totalOut = relPays.reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
@@ -247,6 +245,7 @@
                 s.wallets.forEach(w => {
                     totalWalletsNum += App.calcAmount(w.amount);
                     if (!w.isOutgoDone) activeWalletsOutgo += App.calcAmount(w.outgoAmount);
+                    if (!w.isIncomingDone) activeTargetIncomes += App.calcAmount(w.incomingAmount);
                 });
                 s.incomes.forEach(i => {
                     const amt = App.calcAmount(i.amount);
@@ -316,12 +315,12 @@
                     }
                 });
 
-                const remainingIncomes = Math.max(0, activeIncomesList - activeAccountIncomes);
-                const activeFinalBalance = totalAccountsNum + totalWalletsNum + activeAccountIncomes + remainingIncomes - activePayments - activeWalletsOutgo;
+                const remainingIncomes = Math.max(0, activeIncomesList - activeTargetIncomes);
+                const activeFinalBalance = totalAccountsNum + totalWalletsNum + activeTargetIncomes + remainingIncomes - activePayments - activeWalletsOutgo;
                 const calculatedEndBalance = totalAccountsNum + totalWalletsNum;
 
                 App.totals = { 
-                    totalAccountsNum, totalWalletsNum, activeAccountIncomes, totalAccountIncomes, 
+                    totalAccountsNum, totalWalletsNum, activeTargetIncomes, totalAccountIncomes, 
                     activeWalletsOutgo, activeIncomesList, totalIncomesList, remainingIncomes, 
                     activePayments, totalPaymentsNum, catTotals, allCatTotals, activeFinalBalance, calculatedEndBalance,
                     totalSpecialAmt, totalMonthlyRequired, currentMonthSpecialAmt,
@@ -333,63 +332,101 @@
                 App.calculateTotals();
                 let allocations = [];
                 let availableSources = [];
+                let shortages = {}; // key: 'type_id', value: fillAmount
 
-                // 1. 未済の入金
-                App.state.incomes.forEach(i => {
-                    if (!i.isDone) availableSources.push({ type: 'income', id: i.id, remain: App.calcAmount(i.amount), defaultAccountId: i.defaultAccountId });
-                });
-
-                // 2. 余剰のある口座
-                App.state.accounts.forEach(a => {
-                    const relPays = App.state.payments.filter(p => p.accountId === a.id && !p.isDone);
-                    const totalOut = relPays.reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
-                    const expectedBal = App.calcAmount(a.amount) - totalOut;
-                    if (expectedBal > 0) availableSources.push({ type: 'account', id: a.id, remain: expectedBal });
-                });
-
-                // 3. 余剰のある手元現金
-                App.state.wallets.forEach(w => {
-                    const activeOut = w.isOutgoDone ? 0 : App.calcAmount(w.outgoAmount);
-                    const expectedBal = App.calcAmount(w.amount) - activeOut;
-                    if (expectedBal > 0) availableSources.push({ type: 'wallet', id: w.id, remain: expectedBal });
-                });
-
-                // 不足している口座へ割り振り
+                // 1. 各口座の不足額を計算
                 App.state.accounts.forEach(acc => {
                     const relPays = App.state.payments.filter(p => p.accountId === acc.id && !p.isDone);
                     const totalOut = relPays.reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
                     const expectedBal = App.calcAmount(acc.amount) - totalOut;
 
                     if (expectedBal < 0) {
-                        let fillAmount = Math.ceil(Math.abs(expectedBal) / 1000) * 1000;
-                        for (let src of availableSources) {
-                            if (fillAmount <= 0) break;
-                            if (src.remain <= 0) continue;
-                            if (src.type === 'account' && src.id === acc.id) continue;
+                        shortages['account_' + acc.id] = Math.ceil(Math.abs(expectedBal) / 1000) * 1000;
+                    } else if (expectedBal > 0) {
+                        availableSources.push({ type: 'account', id: acc.id, remain: expectedBal });
+                    }
+                });
 
-                            let allocAmt = Math.min(fillAmount, src.remain);
+                // 2. 現金の不足額/余剰額
+                App.state.wallets.forEach(w => {
+                    const activeOut = w.isOutgoDone ? 0 : App.calcAmount(w.outgoAmount);
+                    const expectedBal = App.calcAmount(w.amount) - activeOut;
+                    if (expectedBal < 0) {
+                        shortages['wallet_' + w.id] = Math.ceil(Math.abs(expectedBal) / 1000) * 1000;
+                    } else if (expectedBal > 0) {
+                        availableSources.push({ type: 'wallet', id: w.id, remain: expectedBal });
+                    }
+                });
+
+                // 3. 入金ソース
+                let availableIncomes = App.state.incomes.filter(i => !i.isDone).map(i => ({
+                    type: 'income', id: i.id, remain: App.calcAmount(i.amount), defaultTarget: i.defaultTarget
+                })).sort((a, b) => b.remain - a.remain); // 金額が大きい順
+
+                availableSources = [...availableIncomes, ...availableSources];
+
+                // a. 優先振込先がマイナスの場合、優先振込先設定されている入金から優先して埋める
+                Object.keys(shortages).forEach(targetKey => {
+                    if (shortages[targetKey] <= 0) return;
+
+                    let targetingIncomes = availableSources.filter(src => src.type === 'income' && src.defaultTarget === targetKey && src.remain > 0);
+                    
+                    for (let src of targetingIncomes) {
+                        if (shortages[targetKey] <= 0) break;
+                        let allocAmt = Math.min(shortages[targetKey], src.remain);
+                        if (allocAmt > 0) {
+                            const [tType, tId] = targetKey.split('_');
                             allocations.push({
                                 id: Date.now() + Math.random(),
                                 sourceType: src.type, sourceId: src.id,
-                                targetType: 'account', targetId: acc.id,
-                                amount: String(allocAmt)
+                                targetType: tType, targetId: Number(tId),
+                                amount: String(allocAmt),
+                                isDefault: true
                             });
                             src.remain -= allocAmt;
-                            fillAmount -= allocAmt;
+                            shortages[targetKey] -= allocAmt;
                         }
                     }
                 });
 
-                // 余剰金の特定口座への割り振り (入金優先)
-                for (let src of availableSources) {
-                    if (src.type === 'income' && src.remain > 0 && src.defaultAccountId) {
-                        const targetAcc = App.state.accounts.find(a => a.id === src.defaultAccountId);
-                        if (targetAcc) {
+                // b. まだマイナスのターゲットがあれば、他のソースから埋める
+                Object.keys(shortages).forEach(targetKey => {
+                    if (shortages[targetKey] <= 0) return;
+
+                    const [tType, tId] = targetKey.split('_');
+                    
+                    for (let src of availableSources) {
+                        if (shortages[targetKey] <= 0) break;
+                        if (src.remain <= 0) continue;
+                        if (src.type === tType && src.id === Number(tId)) continue; // 自分自身からは補填しない
+
+                        let allocAmt = Math.min(shortages[targetKey], src.remain);
+                        if (allocAmt > 0) {
                             allocations.push({
                                 id: Date.now() + Math.random(),
                                 sourceType: src.type, sourceId: src.id,
-                                targetType: 'account', targetId: targetAcc.id,
-                                amount: String(src.remain)
+                                targetType: tType, targetId: Number(tId),
+                                amount: String(allocAmt),
+                                isDefault: false
+                            });
+                            src.remain -= allocAmt;
+                            shortages[targetKey] -= allocAmt;
+                        }
+                    }
+                });
+
+                // c. プラス(remain > 0)になっている入金で、優先振込先が設定されているものは全額割り振る
+                for (let src of availableSources) {
+                    if (src.type === 'income' && src.remain > 0 && src.defaultTarget) {
+                        const [tType, tId] = src.defaultTarget.split('_');
+                        const targetExists = tType === 'account' ? App.state.accounts.some(a=>a.id===Number(tId)) : App.state.wallets.some(w=>w.id===Number(tId));
+                        if (targetExists) {
+                            allocations.push({
+                                id: Date.now() + Math.random(),
+                                sourceType: src.type, sourceId: src.id,
+                                targetType: tType, targetId: Number(tId),
+                                amount: String(src.remain),
+                                isDefault: true
                             });
                             src.remain = 0;
                         }
@@ -412,25 +449,27 @@
                         a.incomingAmount = ''; 
                     }
                 });
-            },
-
-            resetAllocations: function() {
-                if (window.confirm('現在のすべての振り分け設定をリセットしますか？')) {
-                    App.state.allocations = [];
-                    App.syncAllocationsToAccounts();
-                    App.saveData();
-                    App.render();
-                }
+                App.state.wallets.forEach(w => {
+                    const walAllocs = App.state.allocations.filter(al => al.targetType === 'wallet' && al.targetId === w.id);
+                    if (walAllocs.length > 0) {
+                        const sum = walAllocs.reduce((s, al) => s + App.calcAmount(al.amount), 0);
+                        w.incomingAmount = String(sum);
+                    } else {
+                        w.incomingAmount = ''; 
+                    }
+                });
             },
 
             addAllocation: function(sourceType, sourceId) {
-                if (App.state.accounts.length === 0) {
+                if (App.state.accounts.length === 0 && App.state.wallets.length === 0) {
                     alert('先に「口座と現金」タブから口座を登録してください。'); return;
                 }
                 const newId = Date.now() + Math.random();
+                const targetType = App.state.accounts.length > 0 ? 'account' : 'wallet';
+                const targetId = App.state.accounts.length > 0 ? App.state.accounts[0].id : App.state.wallets[0].id;
                 App.state.allocations.push({
                     id: newId, sourceType: sourceType, sourceId: sourceId, 
-                    targetType: 'account', targetId: App.state.accounts[0].id, amount: ""
+                    targetType: targetType, targetId: targetId, amount: ""
                 });
                 App.state.editAllocationId = newId;
                 App.render();
@@ -442,7 +481,10 @@
                 e.preventDefault();
                 const valStr = e.target.amount.value;
                 const valNum = App.calcAmount(valStr);
-                const targetId = Number(e.target.targetId.value);
+                const targetVal = e.target.target.value; // 'account_123' or 'wallet_456'
+                if (!targetVal) return;
+                const [targetType, tIdStr] = targetVal.split('_');
+                const targetId = Number(tIdStr);
                 
                 let sourceLimit = 0;
                 if (sourceType === 'income') {
@@ -470,7 +512,7 @@
                     return;
                 }
 
-                App.state.allocations = App.state.allocations.map(a => a.id === allocId ? { ...a, targetId: targetId, amount: valStr } : a);
+                App.state.allocations = App.state.allocations.map(a => a.id === allocId ? { ...a, targetType: targetType, targetId: targetId, amount: valStr, isDefault: false } : a);
                 App.state.editAllocationId = null;
                 App.syncAllocationsToAccounts();
                 App.saveData();
@@ -560,7 +602,7 @@
                 App.saveData(); App.render(); 
             },
 
-            addIncome: function(e, form) { e.preventDefault(); App.state.incomes.push({ id: Date.now(), name: form.incName.value, amount: App.cleanInput(form.incAmount.value), defaultAccountId: form.incDefaultAccountId.value ? Number(form.incDefaultAccountId.value) : '', isFixed: form.incIsFixed ? form.incIsFixed.checked : false, isDone: false, memo: form.incMemo ? form.incMemo.value : '' }); App.saveData(); App.render(); },
+            addIncome: function(e, form) { e.preventDefault(); App.state.incomes.push({ id: Date.now(), name: form.incName.value, amount: App.cleanInput(form.incAmount.value), defaultTarget: form.incDefaultTarget.value, isFixed: form.incIsFixed ? form.incIsFixed.checked : false, isDone: false, memo: form.incMemo ? form.incMemo.value : '' }); App.saveData(); App.render(); },
             addPayment: function(e, form) { e.preventDefault(); App.state.payments.push({ id: Date.now(), name: form.payName.value, amount: App.cleanInput(form.payAmount.value), dueDate: form.payDueDate.value ? Number(form.payDueDate.value) : null, endDate: form.payEndDate.value || '', accountId: form.payAccountId.value ? Number(form.payAccountId.value) : '', category: form.payCat ? form.payCat.value : 'variable', isDone: false, memo: form.payMemo.value, subItems: [] }); App.saveData(); App.render(); },
             addSubItem: function(e, form, paymentId) { e.preventDefault(); const newItem = { id: Date.now(), name: form.subName.value, amount: App.cleanInput(form.subAmount.value), category: form.subCat.value, endDate: form.subEndDate ? form.subEndDate.value : '', memo: form.subMemo.value }; App.state.payments = App.state.payments.map(p => p.id === paymentId ? { ...p, subItems: [...(p.subItems||[]), newItem] } : p); App.saveData(); App.render(); },
             
@@ -571,6 +613,7 @@
                 if (e) e.stopPropagation();
                 if (type === 'account') App.state.accounts = App.state.accounts.map(a => a.id === id ? { ...a, isIncomingDone: !a.isIncomingDone } : a);
                 if (type === 'wallet') App.state.wallets = App.state.wallets.map(w => w.id === id ? { ...w, isOutgoDone: !w.isOutgoDone } : w);
+                if (type === 'wallet_inc') App.state.wallets = App.state.wallets.map(w => w.id === id ? { ...w, isIncomingDone: !w.isIncomingDone } : w);
                 if (type === 'income') App.state.incomes = App.state.incomes.map(i => i.id === id ? { ...i, isDone: !i.isDone } : i);
                 if (type === 'payment') App.state.payments = App.state.payments.map(p => p.id === id ? { ...p, isDone: !p.isDone } : p);
                 if (type === 'special') App.state.specialPayments = App.state.specialPayments.map(sp => sp.id === id ? { ...sp, isDone: !sp.isDone } : sp);
@@ -607,7 +650,7 @@
                     App.state.accounts = App.state.accounts.map(a => a.id === id ? { ...a, name: form.name.value, amount: App.cleanInput(form.amount.value), memo: form.memo ? form.memo.value : '' } : a);
                 }
                 else if (type === 'wallet') App.state.wallets = App.state.wallets.map(w => w.id === id ? { ...w, name: form.name.value, amount: App.cleanInput(form.amount.value), outgoAmount: form.outgoAmount ? App.cleanInput(form.outgoAmount.value) : w.outgoAmount, isOutgoFixed: form.isOutgoFixed ? form.isOutgoFixed.checked : w.isOutgoFixed, memo: form.memo ? form.memo.value : '' } : w);
-                else if (type === 'income') App.state.incomes = App.state.incomes.map(i => i.id === id ? { ...i, name: form.name.value, amount: App.cleanInput(form.amount.value), defaultAccountId: form.defaultAccountId.value ? Number(form.defaultAccountId.value) : '', isFixed: form.isFixed ? form.isFixed.checked : i.isFixed, memo: form.memo ? form.memo.value : '' } : i);
+                else if (type === 'income') App.state.incomes = App.state.incomes.map(i => i.id === id ? { ...i, name: form.name.value, amount: App.cleanInput(form.amount.value), defaultTarget: form.defaultTarget.value, isFixed: form.isFixed ? form.isFixed.checked : i.isFixed, memo: form.memo ? form.memo.value : '' } : i);
                 else if (type === 'payment') App.state.payments = App.state.payments.map(p => p.id === id ? { ...p, name: form.name.value, amount: App.cleanInput(form.amount.value), dueDate: form.dueDate.value ? Number(form.dueDate.value) : null, endDate: form.endDate ? form.endDate.value : '', accountId: form.accountId.value ? Number(form.accountId.value) : '', category: form.category.value, memo: form.memo ? form.memo.value : '' } : p);
                 else if (type === 'subItem') App.state.payments = App.state.payments.map(p => { if (p.id === paymentId) { return { ...p, subItems: p.subItems.map(s => s.id === id ? { ...s, name: form.name.value, amount: App.cleanInput(form.amount.value), category: form.category.value, endDate: form.endDate ? form.endDate.value : '', memo: form.memo ? form.memo.value : '' } : s) }; } return p; });
                 else if (type === 'special') App.state.specialPayments = App.state.specialPayments.map(sp => sp.id === id ? { ...sp, name: form.name.value, amount: App.cleanInput(form.amount.value), targetMonth: form.targetMonth.value, memo: form.memo ? form.memo.value : '' } : sp);
@@ -617,7 +660,7 @@
 
             executeMonthlyReset: function() {
                 App.state.accounts.forEach(a => { a.incomingAmount = ''; a.isIncomingDone = false; });
-                App.state.wallets.forEach(w => { w.outgoAmount = w.isOutgoFixed ? w.outgoAmount : ''; w.isOutgoDone = false; });
+                App.state.wallets.forEach(w => { w.outgoAmount = w.isOutgoFixed ? w.outgoAmount : ''; w.isOutgoDone = false; w.incomingAmount = ''; w.isIncomingDone = false; });
                 App.state.incomes.forEach(i => { i.amount = i.isFixed ? i.amount : ''; i.isDone = false; });
                 App.state.payments.forEach(p => { p.amount = p.category === 'variable' ? '' : p.amount; p.isDone = false; if (p.subItems) p.subItems.forEach(s => { s.amount = s.category === 'variable' ? '' : s.amount; }); });
                 App.state.allocations = []; 
@@ -844,6 +887,23 @@
             renderCategorySelectLg: function(name, val) { return `<select name="${name}" class="flex-1 px-2 py-1.5 text-sm border rounded bg-white font-bold text-gray-700">${Object.entries(CAT_LABELS).map(([k, d]) => `<option value="${k}" ${val === k ? 'selected' : ''}>${d.label}</option>`).join('')}</select>`; },
             renderAccountSelect: function(name, val) { return `<select name="${name}" class="flex-1 px-2 py-1.5 text-sm border rounded bg-white"><option value="">口座未設定</option>${App.state.accounts.map(a => `<option value="${a.id}" ${Number(val) === a.id ? 'selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}</select>`; },
 
+            renderTargetSelect: function(name, val, defaultText) {
+                let html = `<select name="${name}" class="flex-1 px-2 py-1.5 text-[11px] font-bold border border-gray-300 rounded text-gray-700 bg-gray-50 min-w-[120px]">`;
+                html += `<option value="">${defaultText}</option>`;
+                if (App.state.accounts.length > 0) {
+                    html += `<optgroup label="口座">`;
+                    App.state.accounts.forEach(a => { const v = 'account_' + a.id; html += `<option value="${v}" ${val === v ? 'selected' : ''}>${escapeHTML(a.name)}</option>`; });
+                    html += `</optgroup>`;
+                }
+                if (App.state.wallets.length > 0) {
+                    html += `<optgroup label="手元現金">`;
+                    App.state.wallets.forEach(w => { const v = 'wallet_' + w.id; html += `<option value="${v}" ${val === v ? 'selected' : ''}>${escapeHTML(w.name)}</option>`; });
+                    html += `</optgroup>`;
+                }
+                html += `</select>`;
+                return html;
+            },
+
             renderAllocations: function(sourceType, sourceId, remainAmount) {
                 const allocs = App.state.allocations.filter(a => a.sourceType === sourceType && a.sourceId === sourceId);
                 let html = '';
@@ -851,15 +911,28 @@
                 if (allocs.length > 0) {
                     html += `<div class="mt-3 space-y-1.5 border-t border-gray-100 pt-3">`;
                     allocs.forEach(al => {
-                        const acc = App.state.accounts.find(a => a.id === al.targetId);
-                        const targetName = acc ? acc.name : '不明な口座';
+                        let targetName = '不明';
+                        if (al.targetType === 'account') targetName = (App.state.accounts.find(a => a.id === al.targetId)||{}).name || '不明な口座';
+                        if (al.targetType === 'wallet') targetName = (App.state.wallets.find(w => w.id === al.targetId)||{}).name || '手元現金';
+                        const currentTargetVal = `${al.targetType}_${al.targetId}`;
+
+                        const isDefault = al.isDefault;
+                        let itemClass = "bg-blue-50/80 border-blue-200 text-blue-800 hover:border-blue-400";
+                        let iconClass = "text-blue-400 group-hover:text-blue-600";
+                        let badgeExt = '';
+                        if (isDefault) {
+                            itemClass = "bg-emerald-50/80 border-emerald-200 text-emerald-800 hover:border-emerald-400";
+                            iconClass = "text-emerald-400 group-hover:text-emerald-600";
+                            badgeExt = ' (優先)';
+                        } else if (sourceType === 'wallet') {
+                            itemClass = "bg-amber-50/80 border-amber-200 text-amber-800 hover:border-amber-400";
+                            iconClass = "text-amber-400 group-hover:text-amber-600";
+                        }
                         
                         if (App.state.editAllocationId === al.id) {
                             html += `
-                                <form onsubmit="App.saveEditAllocation(event, ${al.id}, '${sourceType}', ${sourceId})" class="flex items-center gap-1 bg-white border border-blue-400 p-1.5 rounded-lg shadow-md animate-zoom-in ml-auto w-[90%] sm:w-[80%]">
-                                    <select name="targetId" class="flex-1 text-[11px] font-bold border border-gray-300 rounded p-1.5 text-gray-700 bg-gray-50">
-                                        ${App.state.accounts.filter(a => a.id !== sourceId).map(a => `<option value="${a.id}" ${a.id === al.targetId ? 'selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}
-                                    </select>
+                                <form onsubmit="App.saveEditAllocation(event, ${al.id}, '${sourceType}', ${sourceId})" class="flex items-center gap-1 bg-white border border-blue-400 p-1.5 rounded-lg shadow-md animate-zoom-in ml-auto w-full sm:w-[90%]">
+                                    ${App.renderTargetSelect('target', currentTargetVal, '振込先を選択')}
                                     <input name="amount" type="text" value="${escapeHTML(al.amount)}" class="w-20 text-[11px] font-bold border border-gray-300 rounded p-1.5" required/>
                                     <button type="submit" class="px-2.5 py-1.5 bg-blue-600 text-white text-[10px] rounded font-bold">保存</button>
                                     <button type="button" onclick="App.deleteAllocation(${al.id})" class="p-1.5 text-red-500 hover:bg-red-50 rounded">${App.getIconHTML('trash-2', 14)}</button>
@@ -867,11 +940,11 @@
                             `;
                         } else {
                             html += `
-                                <div onclick="App.startEditAllocation(${al.id})" class="cursor-pointer flex items-center justify-between bg-blue-50/80 border border-blue-200 hover:border-blue-400 text-blue-800 px-2.5 py-1.5 rounded-lg text-[11px] ml-auto w-[90%] sm:w-[70%] transition-all shadow-sm group">
-                                    <span class="truncate opacity-80">➡️ ${escapeHTML(targetName)} へ</span>
+                                <div onclick="App.startEditAllocation(${al.id})" class="cursor-pointer flex items-center justify-between border px-2.5 py-1.5 rounded-lg text-[11px] ml-auto w-[90%] sm:w-[80%] transition-all shadow-sm group ${itemClass}">
+                                    <span class="truncate opacity-80">➡️ ${escapeHTML(targetName)} へ${badgeExt}</span>
                                     <div class="flex items-center gap-1.5 shrink-0">
                                         <span class="font-bold">${App.formatCurrency(al.amount)}</span>
-                                        <span class="text-blue-400 group-hover:text-blue-600 transition-colors">${App.getIconHTML('pencil', 12)}</span>
+                                        <span class="transition-colors ${iconClass}">${App.getIconHTML('pencil', 12)}</span>
                                     </div>
                                 </div>
                             `;
@@ -979,33 +1052,41 @@
                         `;
                     } else {
                         const relPays = s.payments.filter(p => p.accountId === item.id && !p.isDone);
-                        const totalOut = relPays.reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
-                        const incAmt = item.isIncomingDone ? 0 : App.calcAmount(item.incomingAmount);
-                        const expectedBal = App.calcAmount(item.amount) + incAmt - totalOut;
-                        const isShort = expectedBal < 0;
+                    const totalOut = relPays.reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
+                    const incAmt = item.isIncomingDone ? 0 : App.calcAmount(item.incomingAmount);
+                    const expectedBal = App.calcAmount(item.amount) + incAmt - totalOut;
+                    const isShort = expectedBal < 0;
 
-                        // 口座向けの割り振り（入金予定）バッジ
-                        const accAllocs = s.allocations.filter(al => al.targetType === 'account' && al.targetId === item.id);
-                        let incomingAllocationsHTML = '';
-                        if (accAllocs.length > 0) {
-                            incomingAllocationsHTML += `<div class="mt-3 pt-3 border-t border-gray-100 flex flex-col gap-1.5">`;
-                            accAllocs.forEach(al => {
-                                let sourceName = '不明';
-                                if (al.sourceType === 'income') sourceName = (s.incomes.find(i => i.id === al.sourceId) || {}).name || '不明な入金';
-                                if (al.sourceType === 'account') sourceName = (s.accounts.find(a => a.id === al.sourceId) || {}).name || '不明な口座';
-                                if (al.sourceType === 'wallet') sourceName = (s.wallets.find(w => w.id === al.sourceId) || {}).name || '手元現金';
-                                incomingAllocationsHTML += `
-                                    <div class="flex justify-between items-center text-[11px] bg-blue-50 border border-blue-100 text-blue-800 px-2 py-1.5 rounded-md shadow-sm">
-                                        <span class="truncate pr-2 opacity-80">⬅️ ${escapeHTML(sourceName)} から</span>
-                                        <span class="font-bold shrink-0">+${App.formatCurrency(al.amount)}</span>
-                                    </div>
-                                `;
-                            });
-                            incomingAllocationsHTML += `</div>`;
-                        }
+                    // 口座向けの割り振り（入金予定）バッジ
+                    const accAllocs = s.allocations.filter(al => al.targetType === 'account' && al.targetId === item.id);
+                    let incomingAllocationsHTML = '';
+                    if (accAllocs.length > 0) {
+                        incomingAllocationsHTML += `<div class="mt-3 pt-3 border-t border-gray-100 flex flex-col gap-1.5">`;
+                        accAllocs.forEach(al => {
+                            let sourceName = '不明';
+                            if (al.sourceType === 'income') sourceName = (s.incomes.find(i => i.id === al.sourceId) || {}).name || '不明な入金';
+                            if (al.sourceType === 'account') sourceName = (s.accounts.find(a => a.id === al.sourceId) || {}).name || '不明な口座';
+                            if (al.sourceType === 'wallet') sourceName = (s.wallets.find(w => w.id === al.sourceId) || {}).name || '手元現金';
+                            
+                            let badgeClass = "bg-blue-50 border-blue-100 text-blue-800";
+                            if (al.isDefault) {
+                                badgeClass = "bg-emerald-50 border-emerald-200 text-emerald-800";
+                            } else if (al.sourceType === 'wallet') {
+                                badgeClass = "bg-amber-50 border-amber-200 text-amber-800";
+                            }
 
-                        // この口座からの割り振り（振出指示）
-                        const allocSum = s.allocations.filter(a => a.sourceType === 'account' && a.sourceId === item.id).reduce((sum, a) => sum + App.calcAmount(a.amount), 0);
+                            incomingAllocationsHTML += `
+                                <div class="flex justify-between items-center text-[11px] ${badgeClass} border px-2 py-1.5 rounded-md shadow-sm">
+                                    <span class="truncate pr-2 opacity-80">⬅️ ${escapeHTML(sourceName)} から${al.isDefault ? ' (優先)' : ''}</span>
+                                    <span class="font-bold shrink-0">+${App.formatCurrency(al.amount)}</span>
+                                </div>
+                            `;
+                        });
+                        incomingAllocationsHTML += `</div>`;
+                    }
+
+                    // この口座からの割り振り（振出指示）
+                    const allocSum = s.allocations.filter(a => a.sourceType === 'account' && a.sourceId === item.id).reduce((sum, a) => sum + App.calcAmount(a.amount), 0);
                         const remainAmount = expectedBal - allocSum;
                         const allocsHTML = App.renderAllocations('account', item.id, remainAmount);
 
@@ -1071,8 +1152,32 @@
                         `;
                     } else {
                         const activeOut = item.isOutgoDone ? 0 : App.calcAmount(item.outgoAmount);
-                        const expectedBal = App.calcAmount(item.amount) - activeOut;
+                        const incAmt = item.isIncomingDone ? 0 : App.calcAmount(item.incomingAmount);
+                        const expectedBal = App.calcAmount(item.amount) + incAmt - activeOut;
                         const isShort = expectedBal < 0;
+
+                        const walAllocs = s.allocations.filter(al => al.targetType === 'wallet' && al.targetId === item.id);
+                        let incomingAllocationsHTML = '';
+                        if (walAllocs.length > 0) {
+                            incomingAllocationsHTML += `<div class="mt-3 pt-3 border-t border-gray-100 flex flex-col gap-1.5">`;
+                            walAllocs.forEach(al => {
+                                let sourceName = '不明';
+                                if (al.sourceType === 'income') sourceName = (s.incomes.find(i => i.id === al.sourceId) || {}).name || '不明な入金';
+                                if (al.sourceType === 'account') sourceName = (s.accounts.find(a => a.id === al.sourceId) || {}).name || '不明な口座';
+                                if (al.sourceType === 'wallet') sourceName = (s.wallets.find(w => w.id === al.sourceId) || {}).name || '手元現金';
+                                
+                                let badgeClass = "bg-amber-50 border-amber-200 text-amber-800";
+                                if (al.isDefault) badgeClass = "bg-emerald-50 border-emerald-200 text-emerald-800";
+
+                                incomingAllocationsHTML += `
+                                    <div class="flex justify-between items-center text-[11px] ${badgeClass} border px-2 py-1.5 rounded-md shadow-sm">
+                                        <span class="truncate pr-2 opacity-80">⬅️ ${escapeHTML(sourceName)} から${al.isDefault ? ' (優先)' : ''}</span>
+                                        <span class="font-bold shrink-0">+${App.formatCurrency(al.amount)}</span>
+                                    </div>
+                                `;
+                            });
+                            incomingAllocationsHTML += `</div>`;
+                        }
 
                         const allocSum = s.allocations.filter(a => a.sourceType === 'wallet' && a.sourceId === item.id).reduce((sum, a) => sum + App.calcAmount(a.amount), 0);
                         const remainAmount = expectedBal - allocSum;
@@ -1085,6 +1190,7 @@
                                     <div class="flex justify-between items-start mb-1">
                                         <span class="font-bold text-gray-800">${escapeHTML(item.name)}</span>
                                         <div class="flex gap-1 shrink-0">
+                                            ${App.calcAmount(item.incomingAmount) > 0 ? `<button type="button" onclick="App.toggleDone('wallet_inc', ${item.id}, event)" class="text-[10px] px-1.5 py-0.5 rounded border font-bold flex items-center ${item.isIncomingDone ? 'bg-emerald-100 text-emerald-800' : 'text-gray-500'}">${App.getIconHTML(item.isIncomingDone ? 'check' : 'done', 12)} 入金${item.isIncomingDone ? '済' : '予定'}</button>` : ''}
                                             ${App.calcAmount(item.outgoAmount) > 0 ? `<button type="button" onclick="App.toggleDone('wallet', ${item.id}, event)" class="text-[10px] px-1.5 py-0.5 rounded border font-bold flex items-center ${item.isOutgoDone ? 'bg-amber-100 text-amber-800' : 'text-gray-500'}">${App.getIconHTML(item.isOutgoDone ? 'check' : 'done', 12)} 消費${item.isOutgoDone ? '済' : '予定'}</button>` : ''}
                                             <button type="button" onclick="App.startEdit('wallet', ${item.id}, event)" class="text-gray-400 hover:text-amber-500 p-0.5">${App.getIconHTML('pencil', 16)}</button>
                                             <button type="button" onclick="App.requestDelete('wallet', ${item.id}, '${escapeHTML(item.name)}', event)" class="text-gray-400 hover:text-red-500 p-0.5">${App.getIconHTML('trash-2', 16)}</button>
@@ -1098,10 +1204,12 @@
                                                 ${App.getDisplayAmountHTML(item.amount, "items-start text-sm text-gray-800")}
                                                 ${activeOut > 0 ? `<span class="text-[10px] text-rose-500 font-bold bg-rose-50 px-1.5 py-0.5 rounded border border-rose-100">消費合計: -${App.formatCurrency(activeOut)}</span>` : ''}
                                             </div>
-                                            ${App.calcAmount(item.outgoAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isOutgoDone ? 'text-gray-400 line-through font-normal' : 'text-rose-600'}">-${App.getDisplayAmountHTML(item.outgoAmount, "inline-flex flex-row gap-1 items-baseline")}</div>` : ''}
+                                            ${App.calcAmount(item.incomingAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isIncomingDone ? 'text-gray-400 line-through font-normal' : 'text-emerald-600'}">+${App.getDisplayAmountHTML(item.incomingAmount, "inline-flex flex-row gap-1 items-baseline")} (入金予定)</div>` : ''}
+                                            ${App.calcAmount(item.outgoAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isOutgoDone ? 'text-gray-400 line-through font-normal' : 'text-rose-600'}">-${App.getDisplayAmountHTML(item.outgoAmount, "inline-flex flex-row gap-1 items-baseline")} (消費予定)</div>` : ''}
                                         </div>
-                                        ${activeOut > 0 ? `<div class="flex-1 text-right pl-2 border-l border-gray-100"><span class="text-[10px] text-gray-500 block">消費後予想</span><span class="font-bold text-sm ${isShort ? 'text-red-600' : 'text-amber-600'}">${App.formatCurrency(expectedBal)}</span></div>` : ''}
+                                        ${(activeOut > 0 || incAmt > 0) ? `<div class="flex-1 text-right pl-2 border-l border-gray-100 min-w-0"><span class="text-[10px] text-gray-500 block">変動後予想</span><span class="font-bold text-sm ${isShort ? 'text-red-600' : 'text-amber-600'}">${App.formatCurrency(expectedBal)}</span></div>` : ''}
                                     </div>
+                                    ${incomingAllocationsHTML}
                                     ${allocsHTML}
                                 </div>
                             </div>
@@ -1146,7 +1254,7 @@
                             
                             <div class="grid grid-cols-3 gap-2 mb-5 text-center relative z-10">
                                 <div class="bg-red-50 p-2.5 rounded-lg border border-red-100">
-                                    <div class="text-[10px] font-bold text-red-600 mb-1">各口座の不足額合計</div>
+                                    <div class="text-[10px] font-bold text-red-600 mb-1">各口座等の不足額合計</div>
                                     <div class="font-black text-sm text-red-700">${App.formatCurrency(shortage)}</div>
                                 </div>
                                 <div class="bg-emerald-50 p-2.5 rounded-lg border border-emerald-100">
@@ -1164,13 +1272,13 @@
                                     ${App.getIconHTML('refresh', 16)} 振分リセット
                                 </button>
                                 <button onclick="App.executeAutoAllocation()" class="flex-1 sm:flex-none px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-md transition-colors flex items-center justify-center gap-1.5 shrink-0">
-                                    ${App.getIconHTML('calculate', 18)} 自動で不足口座へ振り分ける
+                                    ${App.getIconHTML('calculate', 18)} 自動で各入金から不足口座へ割り振る
                                 </button>
                             </div>
                         </div>
 
                         <div class="rounded-2xl p-5 shadow-sm border bg-emerald-50/30 border-emerald-100">
-                            <h3 class="text-lg font-bold flex items-center gap-2 text-emerald-600 mb-4">${App.getIconHTML('arrow-down-to-line', 24)} 入金リストと振替指示</h3>
+                            <h3 class="text-lg font-bold flex items-center gap-2 text-emerald-600 mb-4">${App.getIconHTML('arrow-down-to-line', 24)} 入金リストと振込指示</h3>
                             <div class="space-y-4 mb-6">
                 `;
                 
@@ -1182,21 +1290,32 @@
                                     <input name="name" type="text" value="${escapeHTML(item.name)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="項目名" required/>
                                     <input name="amount" type="text" value="${escapeHTML(item.amount)}" class="w-24 px-2 py-1 text-sm border rounded" placeholder="金額"/>
                                 </div>
-                                <div class="flex gap-2 mb-2">
-                                    <select name="defaultAccountId" class="w-32 px-1 py-1 text-xs border rounded bg-gray-50 text-gray-700 font-bold">
-                                        <option value="">優先先: 設定なし</option>
-                                        ${s.accounts.map(a => `<option value="${a.id}" ${item.defaultAccountId === a.id ? 'selected' : ''}>先: ${escapeHTML(a.name)}</option>`).join('')}
-                                    </select>
+                                <div class="flex gap-2 mb-2 items-center">
+                                    ${App.renderTargetSelect('defaultTarget', item.defaultTarget, '優先先: なし')}
                                     <input name="memo" type="text" value="${escapeHTML(item.memo)}" class="flex-1 px-2 py-1 text-sm border rounded" placeholder="メモ"/>
                                 </div>
                                 <div class="flex justify-between items-center"><label class="text-[11px] font-bold text-emerald-800 flex items-center gap-1"><input name="isFixed" type="checkbox" ${item.isFixed ? 'checked' : ''}/>毎月固定</label><div class="flex gap-2"><button type="button" onclick="App.cancelEdit()" class="px-3 py-1 text-xs border rounded bg-gray-50 font-bold text-gray-600">ｷｬﾝｾﾙ</button><button type="submit" class="px-3 py-1 text-xs text-white bg-emerald-600 rounded font-bold">保存</button></div></div>
                             </form>
                         `;
                     } else {
-                        const allocSum = s.allocations.filter(a => a.sourceType === 'income' && a.sourceId === item.id).reduce((sum, a) => sum + App.calcAmount(a.amount), 0);
-                        const remainAmount = App.calcAmount(item.amount) - allocSum;
+                        const incAllocs = s.allocations.filter(al => al.sourceType === 'income' && al.sourceId === item.id);
+                        const incAmount = App.calcAmount(item.amount);
+                        const allocSum = incAllocs.reduce((sum, al) => sum + App.calcAmount(al.amount), 0);
+                        const remainAmount = incAmount - allocSum;
                         const allocsHTML = App.renderAllocations('income', item.id, remainAmount);
-                        const defaultAccName = item.defaultAccountId ? (s.accounts.find(a=>a.id === item.defaultAccountId)||{}).name : null;
+
+                        const defaultTargetVal = item.defaultTarget;
+                        let defaultTargetName = null;
+                        let defaultTargetIcon = 'building-2';
+                        if (defaultTargetVal) {
+                            const [tType, tId] = defaultTargetVal.split('_');
+                            if (tType === 'account') {
+                                defaultTargetName = (s.accounts.find(a=>a.id === Number(tId))||{}).name;
+                            } else {
+                                defaultTargetName = (s.wallets.find(w=>w.id === Number(tId))||{}).name;
+                                defaultTargetIcon = 'payments';
+                            }
+                        }
 
                         html += `
                             <div class="bg-white p-3 rounded-xl shadow-sm border border-gray-100 transition-all ${item.isDone ? 'opacity-40 bg-gray-50' : ''}">
@@ -1207,7 +1326,7 @@
                                             <div class="flex items-center gap-2 flex-wrap mb-1">
                                                 <span class="font-bold text-gray-800 text-[15px] ${item.isDone ? 'line-through text-gray-400' : ''}">${escapeHTML(item.name)}</span>
                                                 ${item.isFixed ? `<span class="text-[9px] bg-emerald-100 text-emerald-800 px-1.5 rounded font-black">固定</span>` : ''}
-                                                ${defaultAccName ? `<span class="text-[9px] bg-blue-50 border border-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold flex items-center gap-0.5 truncate max-w-[100px]">${App.getIconHTML('building-2', 10)} ${escapeHTML(defaultAccName)}</span>` : ''}
+                                                ${defaultTargetName ? `<span class="text-[9px] bg-blue-50 border border-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold flex items-center gap-0.5 truncate max-w-[120px]">${App.getIconHTML(defaultTargetIcon, 10)} ${escapeHTML(defaultTargetName)}</span>` : ''}
                                             </div>
                                             ${item.memo ? `<div class="text-[10px] text-gray-400 mt-1 flex items-start gap-1">${App.getIconHTML('message-square', 12, 'shrink-0 mt-0.5')} <span class="truncate">${escapeHTML(item.memo)}</span></div>` : ''}
                                         </div>
@@ -1234,10 +1353,7 @@
                                 <input name="incAmount" type="text" placeholder="金額" required class="w-full sm:w-32 px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"/>
                             </div>
                             <div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
-                                <select name="incDefaultAccountId" class="w-full sm:w-48 px-2 py-2 text-sm border rounded-lg bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-200 text-gray-600 font-bold">
-                                    <option value="">優先振込先: (設定なし)</option>
-                                    ${s.accounts.map(a => `<option value="${a.id}">先: ${escapeHTML(a.name)}</option>`).join('')}
-                                </select>
+                                ${App.renderTargetSelect('incDefaultTarget', '', '優先先: 設定なし')}
                                 <button type="submit" class="flex-1 sm:flex-none px-6 py-2 bg-emerald-500 text-white font-bold rounded-lg hover:bg-emerald-600 flex items-center justify-center gap-1 transition-colors">${App.getIconHTML('plus', 18)} 追加</button>
                             </div>
                         </form>
