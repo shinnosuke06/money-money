@@ -88,7 +88,7 @@
                 chartMode: 'all',
                 accounts: [], wallets: [], incomes: [], payments: [], history: [], 
                 specialPayments: [], memos: [],
-                allocations: [], editAllocationId: null, // 割り振り指示用のデータ
+                allocations: [], editAllocationId: null, 
                 expandedPayIds: new Set(), editMode: null, deleteTarget: null,
                 selectedAccountPopup: null, preSaveModal: null, showAutoSaveModal: false,
                 confirmImportData: null, showSuccessModal: false, showBackupErrorModal: false,
@@ -185,11 +185,22 @@
                 App.state.specialPayments = App.safeLoadArray([STORAGE_KEY + 'specialPayments', 'mpm_vanilla_v7_specialPayments']);
                 App.state.memos = App.safeLoadArray([STORAGE_KEY + 'memos', 'mpm_vanilla_v7_memos']);
                 
-                // 割り振りデータのロード。古い形式（incomeIdがない）場合は互換性エラーを防ぐためクリア
-                App.state.allocations = App.safeLoadArray([STORAGE_KEY + 'allocations']) || [];
-                if (App.state.allocations.length > 0 && App.state.allocations[0].incomeId === undefined) {
-                    App.state.allocations = [];
-                }
+                // 割り振りデータのロード (新構造へのマイグレーション含む)
+                const loadedAllocations = App.safeLoadArray([STORAGE_KEY + 'allocations']) || [];
+                App.state.allocations = loadedAllocations.map(a => {
+                    if (a.sourceType) return a;
+                    if (a.incomeId !== undefined) {
+                        return {
+                            id: a.id,
+                            sourceType: 'income',
+                            sourceId: a.incomeId,
+                            targetType: 'account',
+                            targetId: a.accountId,
+                            amount: String(a.amount)
+                        };
+                    }
+                    return null;
+                }).filter(Boolean);
 
                 App.state.saveMonthStr = App.getCurrentMonthStr();
                 App.state.manualHistoryMonth = App.getPreviousMonthStr();
@@ -214,7 +225,7 @@
                 let activeWalletsOutgo = 0;
                 let activeIncomesList = 0, totalIncomesList = 0;
                 let activePayments = 0, totalPaymentsNum = 0;
-                let totalAccountShortage = 0; // 各口座の不足額の合計
+                let totalAccountShortage = 0; 
                 
                 const catTotals = { loan: 0, fixed: 0, variable: 0, investment: 0 };
                 const allCatTotals = { loan: 0, fixed: 0, variable: 0, investment: 0 };
@@ -226,7 +237,6 @@
                     totalAccountIncomes += inc;
                     if (!a.isIncomingDone) activeAccountIncomes += inc;
                     
-                    // 各口座の引落不足額を計算 (割り振りを考慮しない純粋な不足額)
                     const relPays = s.payments.filter(p => p.accountId === a.id && !p.isDone);
                     const totalOut = relPays.reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
                     if (currentBal - totalOut < 0) {
@@ -322,43 +332,56 @@
             executeAutoAllocation: function() {
                 App.calculateTotals();
                 let allocations = [];
-                
-                // 未済の入金（給与など）を利用可能なリソースとしてリスト化
-                let availableIncomes = App.state.incomes.filter(i => !i.isDone).map(i => ({
-                    id: i.id,
-                    remain: App.calcAmount(i.amount)
-                }));
+                let availableSources = [];
 
-                // 1. 各口座の不足分を計算し、1000円単位切り上げで補填
+                // 1. 未済の入金
+                App.state.incomes.forEach(i => {
+                    if (!i.isDone) availableSources.push({ type: 'income', id: i.id, remain: App.calcAmount(i.amount) });
+                });
+
+                // 2. 余剰のある口座
+                App.state.accounts.forEach(a => {
+                    const relPays = App.state.payments.filter(p => p.accountId === a.id && !p.isDone);
+                    const totalOut = relPays.reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
+                    const expectedBal = App.calcAmount(a.amount) - totalOut;
+                    if (expectedBal > 0) availableSources.push({ type: 'account', id: a.id, remain: expectedBal });
+                });
+
+                // 3. 余剰のある手元現金
+                App.state.wallets.forEach(w => {
+                    const activeOut = w.isOutgoDone ? 0 : App.calcAmount(w.outgoAmount);
+                    const expectedBal = App.calcAmount(w.amount) - activeOut;
+                    if (expectedBal > 0) availableSources.push({ type: 'wallet', id: w.id, remain: expectedBal });
+                });
+
+                // 不足している口座へ割り振り
                 App.state.accounts.forEach(acc => {
                     const relPays = App.state.payments.filter(p => p.accountId === acc.id && !p.isDone);
                     const totalOut = relPays.reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
-                    const currentBal = App.calcAmount(acc.amount);
-                    const expectedBal = currentBal - totalOut;
+                    const expectedBal = App.calcAmount(acc.amount) - totalOut;
 
                     if (expectedBal < 0) {
                         let fillAmount = Math.ceil(Math.abs(expectedBal) / 1000) * 1000;
-
-                        // 利用可能な入金から順番に充当していく
-                        for (let inc of availableIncomes) {
+                        for (let src of availableSources) {
                             if (fillAmount <= 0) break;
-                            if (inc.remain <= 0) continue;
+                            if (src.remain <= 0) continue;
+                            if (src.type === 'account' && src.id === acc.id) continue;
 
-                            let allocAmt = Math.min(fillAmount, inc.remain);
+                            let allocAmt = Math.min(fillAmount, src.remain);
                             allocations.push({
                                 id: Date.now() + Math.random(),
-                                incomeId: inc.id,
-                                accountId: acc.id,
+                                sourceType: src.type, sourceId: src.id,
+                                targetType: 'account', targetId: acc.id,
                                 amount: String(allocAmt)
                             });
-                            inc.remain -= allocAmt;
+                            src.remain -= allocAmt;
                             fillAmount -= allocAmt;
                         }
                     }
                 });
 
-                // 2. 余剰金を特定の手数料無料口座へ全額割り振り
-                let totalRemain = availableIncomes.reduce((s, inc) => s + inc.remain, 0);
+                // 余剰金の特定口座への割り振り (入金優先)
+                let totalRemain = availableSources.filter(s => s.type === 'income').reduce((s, src) => s + src.remain, 0);
                 if (totalRemain > 0) {
                     const targetNames = ['三井住友 鳳', '三井住友銀行 鳳', 'JA', '大信', '大阪信用金庫'];
                     let targetAcc = null;
@@ -367,15 +390,15 @@
                         if (targetAcc) break;
                     }
                     if (targetAcc) {
-                        for (let inc of availableIncomes) {
-                            if (inc.remain > 0) {
+                        for (let src of availableSources) {
+                            if (src.type === 'income' && src.remain > 0) {
                                 allocations.push({
                                     id: Date.now() + Math.random(),
-                                    incomeId: inc.id,
-                                    accountId: targetAcc.id,
-                                    amount: String(inc.remain)
+                                    sourceType: src.type, sourceId: src.id,
+                                    targetType: 'account', targetId: targetAcc.id,
+                                    amount: String(src.remain)
                                 });
-                                inc.remain = 0;
+                                src.remain = 0;
                             }
                         }
                     }
@@ -388,9 +411,8 @@
             },
             
             syncAllocationsToAccounts: function() {
-                // 割り振りの結果を口座の入金予定額(incomingAmount)に合算して反映する
                 App.state.accounts.forEach(a => {
-                    const accAllocs = App.state.allocations.filter(al => al.accountId === a.id);
+                    const accAllocs = App.state.allocations.filter(al => al.targetType === 'account' && al.targetId === a.id);
                     if (accAllocs.length > 0) {
                         const sum = accAllocs.reduce((s, al) => s + App.calcAmount(al.amount), 0);
                         a.incomingAmount = String(sum);
@@ -399,14 +421,24 @@
                     }
                 });
             },
-            
-            addAllocation: function(incomeId) {
+
+            resetAllocations: function() {
+                if (window.confirm('現在のすべての振り分け設定をリセットしますか？')) {
+                    App.state.allocations = [];
+                    App.syncAllocationsToAccounts();
+                    App.saveData();
+                    App.render();
+                }
+            },
+
+            addAllocation: function(sourceType, sourceId) {
                 if (App.state.accounts.length === 0) {
                     alert('先に「口座と現金」タブから口座を登録してください。'); return;
                 }
                 const newId = Date.now() + Math.random();
                 App.state.allocations.push({
-                    id: newId, incomeId: incomeId, accountId: App.state.accounts[0].id, amount: ""
+                    id: newId, sourceType: sourceType, sourceId: sourceId, 
+                    targetType: 'account', targetId: App.state.accounts[0].id, amount: ""
                 });
                 App.state.editAllocationId = newId;
                 App.render();
@@ -414,27 +446,39 @@
             
             startEditAllocation: function(id) { App.state.editAllocationId = id; App.render(); },
             
-            saveEditAllocation: function(e, allocId, incomeId) {
+            saveEditAllocation: function(e, allocId, sourceType, sourceId) {
                 e.preventDefault();
                 const valStr = e.target.amount.value;
                 const valNum = App.calcAmount(valStr);
-                const accId = Number(e.target.accountId.value);
+                const targetId = Number(e.target.targetId.value);
                 
-                // 超過チェック：その入金（給与等）の元金額をオーバーしていないか
-                const income = App.state.incomes.find(i => i.id === incomeId);
-                if (!income) return;
-                const incAmount = App.calcAmount(income.amount);
-                
-                // 今回編集している以外の割り振り合計を計算
-                const otherAllocs = App.state.allocations.filter(a => a.incomeId === incomeId && a.id !== allocId);
+                let sourceLimit = 0;
+                if (sourceType === 'income') {
+                    const income = App.state.incomes.find(i => i.id === sourceId);
+                    if (income) sourceLimit = App.calcAmount(income.amount);
+                } else if (sourceType === 'account') {
+                    const acc = App.state.accounts.find(a => a.id === sourceId);
+                    if (acc) {
+                        const relPays = App.state.payments.filter(p => p.accountId === acc.id && !p.isDone);
+                        const totalOut = relPays.reduce((sum, p) => sum + App.calcAmount(p.amount), 0);
+                        sourceLimit = App.calcAmount(acc.amount) - totalOut;
+                    }
+                } else if (sourceType === 'wallet') {
+                    const wal = App.state.wallets.find(w => w.id === sourceId);
+                    if (wal) {
+                        sourceLimit = App.calcAmount(wal.amount) - (wal.isOutgoDone ? 0 : App.calcAmount(wal.outgoAmount));
+                    }
+                }
+
+                const otherAllocs = App.state.allocations.filter(a => a.sourceType === sourceType && a.sourceId === sourceId && a.id !== allocId);
                 const otherSum = otherAllocs.reduce((s, a) => s + App.calcAmount(a.amount), 0);
                 
-                if (otherSum + valNum > incAmount) {
-                    alert('エラー：入金予定額 (' + App.formatCurrency(incAmount) + ') を超過しています！\n金額を減らすか、他の割り振りを削除してください。');
+                if (otherSum + valNum > sourceLimit) {
+                    alert('エラー：割り振り可能額 (' + App.formatCurrency(sourceLimit) + ') を超過しています！\n金額を減らすか、他の割り振りを削除してください。');
                     return;
                 }
 
-                App.state.allocations = App.state.allocations.map(a => a.id === allocId ? { ...a, accountId: accId, amount: valStr } : a);
+                App.state.allocations = App.state.allocations.map(a => a.id === allocId ? { ...a, targetId: targetId, amount: valStr } : a);
                 App.state.editAllocationId = null;
                 App.syncAllocationsToAccounts();
                 App.saveData();
@@ -476,7 +520,6 @@
                         }
                     }
                 });
-
                 return details;
             },
 
@@ -528,7 +571,6 @@
             addIncome: function(e, form) { e.preventDefault(); App.state.incomes.push({ id: Date.now(), name: form.incName.value, amount: App.cleanInput(form.incAmount.value), isFixed: form.incIsFixed ? form.incIsFixed.checked : false, isDone: false, memo: form.incMemo ? form.incMemo.value : '' }); App.saveData(); App.render(); },
             addPayment: function(e, form) { e.preventDefault(); App.state.payments.push({ id: Date.now(), name: form.payName.value, amount: App.cleanInput(form.payAmount.value), dueDate: form.payDueDate.value ? Number(form.payDueDate.value) : null, endDate: form.payEndDate.value || '', accountId: form.payAccountId.value ? Number(form.payAccountId.value) : '', category: form.payCat ? form.payCat.value : 'variable', isDone: false, memo: form.payMemo.value, subItems: [] }); App.saveData(); App.render(); },
             addSubItem: function(e, form, paymentId) { e.preventDefault(); const newItem = { id: Date.now(), name: form.subName.value, amount: App.cleanInput(form.subAmount.value), category: form.subCat.value, endDate: form.subEndDate ? form.subEndDate.value : '', memo: form.subMemo.value }; App.state.payments = App.state.payments.map(p => p.id === paymentId ? { ...p, subItems: [...(p.subItems||[]), newItem] } : p); App.saveData(); App.render(); },
-            
             addSpecialPayment: function(e, form) { e.preventDefault(); App.state.specialPayments.push({ id: Date.now(), name: form.spName.value, amount: App.cleanInput(form.spAmount.value), targetMonth: form.spMonth.value, memo: form.spMemo.value, isDone: false }); App.saveData(); App.render(); },
             addMemo: function(e, form) { e.preventDefault(); App.state.memos.push({ id: Date.now(), title: form.mTitle.value, targetDate: form.mDate.value, content: form.mContent.value }); App.state.memos.sort((a,b)=>new Date(a.targetDate) - new Date(b.targetDate)); App.saveData(); App.render(); },
 
@@ -554,7 +596,6 @@
                 else { App.state[t.type + 's'] = App.state[t.type + 's'].filter(item => item.id !== t.id); }
                 App.state.deleteTarget = null; App.saveData(); App.render();
             },
-            
             closeModal: function(modalName) { 
                 App.state[modalName] = null; 
                 if (modalName === 'showAutoSaveModal') App.state.showAutoSaveModal = false; 
@@ -570,7 +611,6 @@
             saveEdit: function(e, type, id, paymentId) {
                 e.preventDefault(); const form = e.target;
                 if (type === 'account') {
-                    // 口座の編集時は入金予定は手動で上書きさせない
                     App.state.accounts = App.state.accounts.map(a => a.id === id ? { ...a, name: form.name.value, amount: App.cleanInput(form.amount.value), memo: form.memo ? form.memo.value : '' } : a);
                 }
                 else if (type === 'wallet') App.state.wallets = App.state.wallets.map(w => w.id === id ? { ...w, name: form.name.value, amount: App.cleanInput(form.amount.value), outgoAmount: form.outgoAmount ? App.cleanInput(form.outgoAmount.value) : w.outgoAmount, isOutgoFixed: form.isOutgoFixed ? form.isOutgoFixed.checked : w.isOutgoFixed, memo: form.memo ? form.memo.value : '' } : w);
@@ -587,7 +627,7 @@
                 App.state.wallets.forEach(w => { w.outgoAmount = w.isOutgoFixed ? w.outgoAmount : ''; w.isOutgoDone = false; });
                 App.state.incomes.forEach(i => { i.amount = i.isFixed ? i.amount : ''; i.isDone = false; });
                 App.state.payments.forEach(p => { p.amount = p.category === 'variable' ? '' : p.amount; p.isDone = false; if (p.subItems) p.subItems.forEach(s => { s.amount = s.category === 'variable' ? '' : s.amount; }); });
-                App.state.allocations = []; // 月替りで割り振りもリセット
+                App.state.allocations = []; 
             },
             handleManualResetClick: function() {
                 if (window.confirm('すべての「済」を解除し、変動費の金額をリセットします。')) {
@@ -612,11 +652,24 @@
                 }
             },
 
-            // --- 新規追加: 履歴の個別編集機能 ---
+            executeDeleteSubItem: function(paymentId, subId) {
+                if (window.confirm('この内訳を削除しますか？')) {
+                    App.state.payments = App.state.payments.map(p => {
+                        if (p.id === paymentId) {
+                            return { ...p, subItems: (p.subItems || []).filter(s => s.id !== subId) };
+                        }
+                        return p;
+                    });
+                    App.saveData();
+                    App.render();
+                }
+            },
+
             startHistoryEdit: function(id) {
+                const historyItem = App.state.history.find(h => h.id === id);
+                if (!historyItem) return;
                 App.state.historyEditMode = id;
-                const targetHistory = App.state.history.find(h => h.id === id);
-                App.state.tempHistoryEditData = JSON.parse(JSON.stringify(targetHistory));
+                App.state.tempHistoryEditData = JSON.parse(JSON.stringify(historyItem));
                 App.render();
             },
             cancelHistoryEdit: function() {
@@ -633,337 +686,160 @@
                 App.render();
             },
             updateTempHistoryIncome: function(val) {
-                if(App.state.tempHistoryEditData) App.state.tempHistoryEditData.income = Number(val) || 0;
+                App.state.tempHistoryEditData.income = Number(val);
+                App.render();
             },
             updateTempHistoryBalance: function(val) {
-                if(App.state.tempHistoryEditData) App.state.tempHistoryEditData.balance = Number(val) || 0;
+                App.state.tempHistoryEditData.balance = Number(val);
+                App.render();
             },
             updateTempHistoryIncomeDetail: function(id, val) {
-                const temp = App.state.tempHistoryEditData;
-                if (!temp || !temp.incomeDetails) return;
-                const item = temp.incomeDetails.find(i => i.id === id);
-                if (item) {
-                    item.amount = Number(val) || 0;
-                    temp.income = temp.incomeDetails.reduce((sum, i) => sum + i.amount, 0);
-                }
+                if(!App.state.tempHistoryEditData.incomeDetails) return;
+                App.state.tempHistoryEditData.incomeDetails = App.state.tempHistoryEditData.incomeDetails.map(d => d.id === id ? {...d, amount: Number(val)} : d);
+                App.state.tempHistoryEditData.income = App.state.tempHistoryEditData.incomeDetails.reduce((sum, d) => sum + d.amount, 0);
+                App.render();
             },
             updateTempHistoryDetail: function(cat, id, val) {
-                const temp = App.state.tempHistoryEditData;
-                if (!temp || !temp.details || !temp.details[cat]) return;
-                const item = temp.details[cat].find(i => i.id === id);
-                if (item) {
-                    item.amount = Number(val) || 0;
-                    temp.catTotals[cat] = temp.details[cat].reduce((sum, i) => sum + i.amount, 0);
-                    temp.payment = Object.values(temp.catTotals).reduce((sum, val) => sum + val, 0);
-                }
+                if(!App.state.tempHistoryEditData.details || !App.state.tempHistoryEditData.details[cat]) return;
+                App.state.tempHistoryEditData.details[cat] = App.state.tempHistoryEditData.details[cat].map(d => d.id === id ? {...d, amount: Number(val)} : d);
+                
+                const catTotal = App.state.tempHistoryEditData.details[cat].reduce((sum, d) => sum + d.amount, 0);
+                if(!App.state.tempHistoryEditData.catTotals) App.state.tempHistoryEditData.catTotals = {};
+                App.state.tempHistoryEditData.catTotals[cat] = catTotal;
+                
+                let totalPayment = 0;
+                Object.values(App.state.tempHistoryEditData.catTotals).forEach(v => totalPayment += v);
+                App.state.tempHistoryEditData.payment = totalPayment;
+                App.render();
             },
 
-            // --- 新規追加: 手動履歴保存機能 ---
             triggerSaveHistory: function() {
-                const s = App.state;
-                const manualMonth = s.manualHistoryMonth;
-                if (!manualMonth) {
-                    alert('記録する月を選択してください。');
+                App.calculateTotals();
+                const targetMonth = App.state.manualHistoryMonth;
+                if (!targetMonth) {
+                    alert('月を選択してください。');
                     return;
                 }
-                
-                App.calculateTotals();
-                const [y, m] = manualMonth.split('-');
+                const [y, m] = targetMonth.split('-');
                 const label = `${y.slice(2)}年${parseInt(m, 10)}月`;
                 
-                s.preSaveModal = {
-                    id: manualMonth,
+                App.state.preSaveModal = {
+                    id: targetMonth,
                     label: label,
-                    payment: App.totals.totalPaymentsNum,
-                    balance: App.totals.calculatedEndBalance,
                     income: App.totals.totalIncomesList,
-                    catTotals: App.totals.allCatTotals,
-                    details: App.createHistoryDetails(),
-                    incomeDetails: App.createIncomeDetails()
+                    payment: App.totals.totalPaymentsNum,
+                    balance: App.totals.calculatedEndBalance
                 };
                 App.render();
             },
             confirmSaveHistory: function() {
-                const s = App.state;
-                const modal = s.preSaveModal;
-                if (!modal) return;
-                
-                const incomeInput = document.getElementById('pre-save-income');
-                const paymentInput = document.getElementById('pre-save-payment');
-                const balanceInput = document.getElementById('pre-save-balance');
-                
-                if (incomeInput && paymentInput && balanceInput) {
-                    modal.income = Number(incomeInput.value) || 0;
-                    modal.payment = Number(paymentInput.value) || 0;
-                    modal.balance = Number(balanceInput.value) || 0;
-                }
-                
-                const existingIndex = s.history.findIndex(h => h.id === modal.id);
+                const modal = App.state.preSaveModal;
+                const incomeInput = document.getElementById('pre-save-income').value;
+                const paymentInput = document.getElementById('pre-save-payment').value;
+                const balanceInput = document.getElementById('pre-save-balance').value;
+
+                const newHistory = {
+                    id: modal.id,
+                    label: modal.label,
+                    income: Number(incomeInput),
+                    payment: Number(paymentInput),
+                    balance: Number(balanceInput),
+                    catTotals: App.totals.allCatTotals,
+                    details: App.createHistoryDetails(),
+                    incomeDetails: App.createIncomeDetails()
+                };
+
+                const existingIndex = App.state.history.findIndex(h => h.id === modal.id);
                 if (existingIndex >= 0) {
-                    s.history[existingIndex] = modal;
+                    App.state.history[existingIndex] = newHistory;
                 } else {
-                    s.history.push(modal);
-                    s.history.sort((a, b) => a.id.localeCompare(b.id));
+                    App.state.history.push(newHistory);
+                    App.state.history.sort((a, b) => a.id.localeCompare(b.id));
                 }
-                
-                s.preSaveModal = null;
+
+                App.state.preSaveModal = null;
                 App.saveData();
                 App.render();
             },
 
-            // --- 新規追加: サブアイテム削除機能 ---
-            executeDeleteSubItem: function(paymentId, subId) {
-                App.state.payments = App.state.payments.map(p => {
-                    if (p.id === paymentId) {
-                        return { ...p, subItems: (p.subItems || []).filter(s => s.id !== subId) };
-                    }
-                    return p;
-                });
-                App.saveData();
-                App.render();
-            },
-
-            // --- 新規追加: エクスポート・インポート機能 ---
             generateExportText: function() {
-                const s = App.state;
-                const b64Encode = (str) => btoa(unescape(encodeURIComponent(str)));
-                const b64JSON = (obj) => b64Encode(JSON.stringify(obj));
-
-                let txt = "---支払い管理バックアップ---\n\n";
-                
-                txt += "【手元現金】\n";
-                s.wallets.forEach(w => {
-                    txt += `${w.id},${w.name},${w.amount},${w.outgoAmount || ''},${w.isOutgoDone ? 1 : 0},${w.isOutgoFixed ? 1 : 0},${w.memo || ''}\n`;
-                });
-                
-                txt += "\n【口座】\n";
-                s.accounts.forEach(a => {
-                    txt += `${a.id},${a.name},${a.amount},${a.incomingAmount || ''},${a.isIncomingDone ? 1 : 0},${a.memo || ''}\n`;
-                });
-                
-                txt += "\n【入金】\n";
-                s.incomes.forEach(i => {
-                    txt += `${i.id},${i.name},${i.amount},${i.isFixed ? 1 : 0},${i.isDone ? 1 : 0},${i.memo || ''}\n`;
-                });
-                
-                txt += "\n【支払い】\n";
-                s.payments.forEach(p => {
-                    txt += `${p.id},${p.name},${p.amount},${p.dueDate || ''},${p.accountId || ''},${p.category || ''},${p.isDone ? 1 : 0},${p.memo || ''},${p.endDate || ''}\n`;
-                    if (p.subItems && p.subItems.length > 0) {
-                        p.subItems.forEach(sub => {
-                            txt += `>${sub.id},${sub.name},${sub.amount},${sub.category || ''},${sub.endDate || ''},${sub.memo || ''}\n`;
-                        });
-                    }
-                });
-                
-                txt += "\n【特別支出】\n";
-                s.specialPayments.forEach(sp => {
-                    txt += `${sp.id},${sp.name},${sp.amount},${sp.targetMonth || ''},${sp.isDone ? 1 : 0},${sp.memo || ''}\n`;
-                });
-                
-                txt += "\n【メモ】\n";
-                s.memos.forEach(m => {
-                    txt += `${m.id},${m.title},${m.targetDate || ''},${b64Encode(m.content || '')}\n`;
-                });
-                
-                txt += "\n【履歴】\n";
-                s.history.forEach(h => {
-                    txt += `${h.id},${h.label},${h.payment},${h.balance},${h.catTotals?.loan||0},${h.catTotals?.fixed||0},${h.catTotals?.variable||0},${h.catTotals?.investment||0},${b64JSON(h.details||{})},${h.income||0},${b64JSON(h.incomeDetails||[])}\n`;
-                });
-
-                txt += "\n【割り振り】\n";
-                s.allocations.forEach(al => {
-                    txt += `${al.id},${al.incomeId},${al.accountId},${al.amount}\n`;
-                });
-                
-                return txt;
+                const exportObj = {
+                    accounts: App.state.accounts, wallets: App.state.wallets, incomes: App.state.incomes,
+                    payments: App.state.payments, history: App.state.history, specialPayments: App.state.specialPayments,
+                    memos: App.state.memos, allocations: App.state.allocations
+                };
+                return JSON.stringify(exportObj, null, 2);
             },
-
-            handleGenerateExport: function() {
-                App.state.exportData = App.generateExportText();
-                App.state.copySuccess = false;
-                App.render();
-            },
-
             handleDownloadExport: function() {
                 const text = App.generateExportText();
                 const blob = new Blob([text], { type: 'text/plain' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = url;
-                a.download = `支払い管理バックアップ_${App.getCurrentMonthStr()}.txt`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
+                a.href = url; 
+                a.download = `支払管理バックアップ_${new Date().toISOString().slice(0, 10)}.txt`;
+                document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
             },
-
+            handleGenerateExport: function() {
+                App.state.exportData = App.generateExportText();
+                App.state.copySuccess = false;
+                App.render();
+            },
             handleCopy: function() {
-                const text = App.state.exportData;
-                if (navigator.clipboard && window.isSecureContext) {
-                    navigator.clipboard.writeText(text).then(() => {
-                        App.state.copySuccess = true;
-                        App.render();
-                        setTimeout(() => { App.state.copySuccess = false; App.render(); }, 2000);
-                    });
-                } else {
+                if (!App.state.exportData) return;
+                try {
                     const textArea = document.createElement("textarea");
-                    textArea.value = text;
-                    textArea.style.position = "fixed";
+                    textArea.value = App.state.exportData;
                     document.body.appendChild(textArea);
-                    textArea.focus();
                     textArea.select();
-                    try {
-                        document.execCommand('copy');
-                        App.state.copySuccess = true;
-                        App.render();
-                        setTimeout(() => { App.state.copySuccess = false; App.render(); }, 2000);
-                    } catch (err) {
-                        console.error('コピー失敗', err);
-                    }
+                    document.execCommand("copy");
                     document.body.removeChild(textArea);
+                    App.state.copySuccess = true;
+                    App.render();
+                    setTimeout(() => { App.state.copySuccess = false; App.render(); }, 2000);
+                } catch (e) {
+                    alert("コピーに失敗しました。テキストエリアを選択して手動でコピーしてください。");
                 }
             },
-
             handleFileUpload: function(input) {
                 const file = input.files[0];
                 if (!file) return;
                 const reader = new FileReader();
-                reader.onload = (e) => {
-                    App.state.importData = e.target.result;
-                    input.value = ''; // 連続で同じファイルを読めるようにリセット
-                    App.render();
-                };
+                reader.onload = function(e) { App.state.importData = e.target.result; App.render(); };
                 reader.readAsText(file);
             },
-
             handleImportClick: function() {
-                if (!App.state.importData) {
-                    App.state.importMsg = { text: 'データが空です。', isError: true };
-                    App.render();
-                    return;
+                if (!App.state.importData || App.state.importData.trim() === '') {
+                    App.state.importMsg = { text: 'データが入力されていません。', isError: true };
+                    App.render(); return;
                 }
-                App.state.confirmImportData = true;
-                App.render();
+                try {
+                    JSON.parse(App.state.importData);
+                    App.state.importMsg = { text: '', isError: false };
+                    App.state.confirmImportData = true;
+                    App.render();
+                } catch (e) {
+                    App.state.importMsg = { text: 'データの形式が正しくありません。(JSONパースエラー)', isError: true };
+                    App.render();
+                }
             },
-
             executeImport: function() {
                 try {
-                    const text = App.state.importData;
-                    if (!text || !text.includes('---支払い管理バックアップ---')) {
-                        throw new Error('無効なデータ形式です。「---支払い管理バックアップ---」で始まるテキストをご用意ください。');
-                    }
-                    
-                    const lines = text.split('\n');
-                    let currentSection = '';
-                    
-                    const newS = {
-                        wallets: [], accounts: [], incomes: [], payments: [], specialPayments: [], memos: [], history: [], allocations: []
-                    };
-                    
-                    const b64Decode = (str) => {
-                        try { return decodeURIComponent(escape(atob(str))); } catch(e) { return str; }
-                    };
-                    
-                    let currentPayment = null;
-
-                    lines.forEach(line => {
-                        const trimmed = line.trim();
-                        if (!trimmed) return;
-                        if (trimmed.startsWith('【') && trimmed.endsWith('】')) {
-                            currentSection = trimmed;
-                            return;
-                        }
-                        if (trimmed === '---支払い管理バックアップ---') return;
-                        
-                        const isSub = trimmed.startsWith('>');
-                        const rawLine = isSub ? trimmed.substring(1) : trimmed;
-                        const p = rawLine.split(',');
-                        // カンマがメモに含まれる場合の対策（指定インデックス以降を結合）
-                        const getMemo = (parts, startIdx, endIdx) => parts.slice(startIdx, endIdx).join(',');
-
-                        if (currentSection === '【手元現金】') {
-                            newS.wallets.push({
-                                id: Number(p[0]), name: p[1], amount: p[2], outgoAmount: p[3], 
-                                isOutgoDone: p[4] === '1', isOutgoFixed: p[5] === '1', memo: getMemo(p, 6)
-                            });
-                        } else if (currentSection === '【口座】') {
-                            newS.accounts.push({
-                                id: Number(p[0]), name: p[1], amount: p[2], incomingAmount: p[3], 
-                                isIncomingDone: p[4] === '1', memo: getMemo(p, 5)
-                            });
-                        } else if (currentSection === '【入金】') {
-                            newS.incomes.push({
-                                id: Number(p[0]), name: p[1], amount: p[2], 
-                                isFixed: p[3] === '1', isDone: p[4] === '1', memo: getMemo(p, 5)
-                            });
-                        } else if (currentSection === '【支払い】') {
-                            if (!isSub) {
-                                let endDateStr = p[p.length - 1]; // 最後は必ずendDate
-                                let memoStr = getMemo(p, 7, p.length - 1);
-                                currentPayment = {
-                                    id: Number(p[0]), name: p[1], amount: p[2], dueDate: p[3] ? Number(p[3]) : null, 
-                                    accountId: p[4] ? Number(p[4]) : '', category: p[5] || 'variable', isDone: p[6] === '1', 
-                                    memo: memoStr, endDate: endDateStr, subItems: []
-                                };
-                                newS.payments.push(currentPayment);
-                            } else {
-                                let endDateStr = p[4];
-                                let memoStr = getMemo(p, 5);
-                                if (currentPayment) {
-                                    currentPayment.subItems.push({
-                                        id: Number(p[0]), name: p[1], amount: p[2], category: p[3] || 'variable', endDate: endDateStr, memo: memoStr
-                                    });
-                                }
-                            }
-                        } else if (currentSection === '【特別支出】') {
-                            newS.specialPayments.push({
-                                id: Number(p[0]), name: p[1], amount: p[2], targetMonth: p[3], isDone: p[4] === '1', memo: getMemo(p, 5)
-                            });
-                        } else if (currentSection === '【メモ】') {
-                            newS.memos.push({
-                                id: Number(p[0]), title: p[1], targetDate: p[2], content: p[3] ? b64Decode(p[3]) : ''
-                            });
-                        } else if (currentSection === '【履歴】') {
-                            let catTotals = { loan: Number(p[4]), fixed: Number(p[5]), variable: Number(p[6]), investment: Number(p[7]) };
-                            let details = {};
-                            if (p[8]) { try { details = JSON.parse(b64Decode(p[8])); } catch(e){} }
-                            let incomeDetails = [];
-                            if (p[10]) { try { incomeDetails = JSON.parse(b64Decode(p[10])); } catch(e){} }
-                            
-                            newS.history.push({
-                                id: p[0], label: p[1], payment: Number(p[2]), balance: Number(p[3]), 
-                                income: Number(p[9] || 0), catTotals: catTotals, details: details, incomeDetails: incomeDetails
-                            });
-                        } else if (currentSection === '【割り振り】') {
-                            newS.allocations.push({
-                                id: Number(p[0]), incomeId: Number(p[1]), accountId: Number(p[2]), amount: p[3]
-                            });
-                        }
-                    });
-
-                    // 状態を更新
-                    App.state.wallets = newS.wallets;
-                    App.state.accounts = newS.accounts;
-                    App.state.incomes = newS.incomes;
-                    App.state.payments = newS.payments;
-                    App.state.specialPayments = newS.specialPayments;
-                    App.state.memos = newS.memos;
-                    App.state.history = newS.history;
-                    App.state.allocations = newS.allocations;
-
-                    App.state.importData = '';
-                    App.state.importMsg = { text: '', isError: false };
-                    App.state.confirmImportData = null;
-                    App.state.showSuccessModal = true;
+                    const data = JSON.parse(App.state.importData);
+                    if(data.accounts) App.state.accounts = data.accounts;
+                    if(data.wallets) App.state.wallets = data.wallets;
+                    if(data.incomes) App.state.incomes = data.incomes;
+                    if(data.payments) App.state.payments = data.payments;
+                    if(data.history) App.state.history = data.history;
+                    if(data.specialPayments) App.state.specialPayments = data.specialPayments;
+                    if(data.memos) App.state.memos = data.memos;
+                    if(data.allocations) App.state.allocations = data.allocations;
                     
                     App.saveData();
-                    App.render();
-                    
-                } catch (error) {
-                    console.error(error);
+                    App.state.confirmImportData = null; App.state.importData = ''; App.state.importMsg = { text: '', isError: false };
+                    App.state.showSuccessModal = true; App.render();
+                } catch(e) {
                     App.state.confirmImportData = null;
-                    App.state.importMsg = { text: error.message || '復元中にエラーが発生しました。', isError: true };
+                    App.state.importMsg = { text: '復元中にエラーが発生しました。', isError: true };
                     App.render();
                 }
             },
@@ -974,6 +850,51 @@
             renderCategorySelect: function(name, val) { return `<select name="${name}" class="w-24 px-1 py-1 text-xs border rounded">${Object.entries(CAT_LABELS).map(([k, d]) => `<option value="${k}" ${val === k ? 'selected' : ''}>${d.label}</option>`).join('')}</select>`; },
             renderCategorySelectLg: function(name, val) { return `<select name="${name}" class="flex-1 px-2 py-1.5 text-sm border rounded bg-white font-bold text-gray-700">${Object.entries(CAT_LABELS).map(([k, d]) => `<option value="${k}" ${val === k ? 'selected' : ''}>${d.label}</option>`).join('')}</select>`; },
             renderAccountSelect: function(name, val) { return `<select name="${name}" class="flex-1 px-2 py-1.5 text-sm border rounded bg-white"><option value="">口座未設定</option>${App.state.accounts.map(a => `<option value="${a.id}" ${Number(val) === a.id ? 'selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}</select>`; },
+
+            renderAllocations: function(sourceType, sourceId, remainAmount) {
+                const allocs = App.state.allocations.filter(a => a.sourceType === sourceType && a.sourceId === sourceId);
+                let html = '';
+                
+                if (allocs.length > 0) {
+                    html += `<div class="mt-3 space-y-1.5 border-t border-gray-100 pt-3">`;
+                    allocs.forEach(al => {
+                        const acc = App.state.accounts.find(a => a.id === al.targetId);
+                        const targetName = acc ? acc.name : '不明な口座';
+                        
+                        if (App.state.editAllocationId === al.id) {
+                            html += `
+                                <form onsubmit="App.saveEditAllocation(event, ${al.id}, '${sourceType}', ${sourceId})" class="flex items-center gap-1 bg-white border border-blue-400 p-1.5 rounded-lg shadow-md animate-zoom-in ml-auto w-[90%] sm:w-[80%]">
+                                    <select name="targetId" class="flex-1 text-[11px] font-bold border border-gray-300 rounded p-1.5 text-gray-700 bg-gray-50">
+                                        ${App.state.accounts.filter(a => a.id !== sourceId).map(a => `<option value="${a.id}" ${a.id === al.targetId ? 'selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}
+                                    </select>
+                                    <input name="amount" type="text" value="${escapeHTML(al.amount)}" class="w-20 text-[11px] font-bold border border-gray-300 rounded p-1.5" required/>
+                                    <button type="submit" class="px-2.5 py-1.5 bg-blue-600 text-white text-[10px] rounded font-bold">保存</button>
+                                    <button type="button" onclick="App.deleteAllocation(${al.id})" class="p-1.5 text-red-500 hover:bg-red-50 rounded">${App.getIconHTML('trash-2', 14)}</button>
+                                </form>
+                            `;
+                        } else {
+                            html += `
+                                <div onclick="App.startEditAllocation(${al.id})" class="cursor-pointer flex items-center justify-between bg-blue-50/80 border border-blue-200 hover:border-blue-400 text-blue-800 px-2.5 py-1.5 rounded-lg text-[11px] ml-auto w-[90%] sm:w-[70%] transition-all shadow-sm group">
+                                    <span class="truncate opacity-80">➡️ ${escapeHTML(targetName)} へ</span>
+                                    <div class="flex items-center gap-1.5 shrink-0">
+                                        <span class="font-bold">${App.formatCurrency(al.amount)}</span>
+                                        <span class="text-blue-400 group-hover:text-blue-600 transition-colors">${App.getIconHTML('pencil', 12)}</span>
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    });
+                    html += `</div>`;
+                }
+
+                html += `
+                    <div class="mt-2 flex justify-between items-center text-[10px] ${allocs.length === 0 ? 'border-t border-gray-100 pt-2' : ''}">
+                        <button type="button" onclick="App.addAllocation('${sourceType}', ${sourceId})" class="text-indigo-600 font-bold flex items-center hover:bg-indigo-50 px-1.5 py-1 rounded transition-colors border border-transparent hover:border-indigo-100">+ 振出・振分を追加</button>
+                        <span class="${remainAmount < 0 ? 'text-red-600 font-bold bg-red-50 border border-red-200 px-1.5 py-0.5 rounded shadow-sm' : 'text-gray-500 font-bold'}">余力(未割当): ${App.formatCurrency(remainAmount)}</span>
+                    </div>
+                `;
+                return html;
+            },
 
             render: function() {
                 try {
@@ -1070,29 +991,36 @@
                         const expectedBal = App.calcAmount(item.amount) + incAmt - totalOut;
                         const isShort = expectedBal < 0;
 
-                        // 口座向けの割り振り指示を抽出してバッジHTMLを組み立て
-                        const accAllocs = s.allocations.filter(al => al.accountId === item.id);
-                        let allocsHTML = '';
+                        // 口座向けの割り振り（入金予定）バッジ
+                        const accAllocs = s.allocations.filter(al => al.targetType === 'account' && al.targetId === item.id);
+                        let incomingAllocationsHTML = '';
                         if (accAllocs.length > 0) {
-                            allocsHTML += `<div class="mt-3 pt-3 border-t border-gray-100 flex flex-col gap-1.5">`;
+                            incomingAllocationsHTML += `<div class="mt-3 pt-3 border-t border-gray-100 flex flex-col gap-1.5">`;
                             accAllocs.forEach(al => {
-                                const inc = s.incomes.find(i => i.id === al.incomeId);
-                                const incName = inc ? inc.name : '不明な入金';
-                                allocsHTML += `
+                                let sourceName = '不明';
+                                if (al.sourceType === 'income') sourceName = (s.incomes.find(i => i.id === al.sourceId) || {}).name || '不明な入金';
+                                if (al.sourceType === 'account') sourceName = (s.accounts.find(a => a.id === al.sourceId) || {}).name || '不明な口座';
+                                if (al.sourceType === 'wallet') sourceName = (s.wallets.find(w => w.id === al.sourceId) || {}).name || '手元現金';
+                                incomingAllocationsHTML += `
                                     <div class="flex justify-between items-center text-[11px] bg-blue-50 border border-blue-100 text-blue-800 px-2 py-1.5 rounded-md shadow-sm">
-                                        <span class="truncate pr-2 opacity-80">⬅️ ${escapeHTML(incName)} から</span>
+                                        <span class="truncate pr-2 opacity-80">⬅️ ${escapeHTML(sourceName)} から</span>
                                         <span class="font-bold shrink-0">+${App.formatCurrency(al.amount)}</span>
                                     </div>
                                 `;
                             });
-                            allocsHTML += `</div>`;
+                            incomingAllocationsHTML += `</div>`;
                         }
 
+                        // この口座からの割り振り（振出指示）
+                        const allocSum = s.allocations.filter(a => a.sourceType === 'account' && a.sourceId === item.id).reduce((sum, a) => sum + App.calcAmount(a.amount), 0);
+                        const remainAmount = expectedBal - allocSum;
+                        const allocsHTML = App.renderAllocations('account', item.id, remainAmount);
+
                         html += `
-                            <div class="bg-white rounded-lg p-3 shadow-sm border border-gray-100 flex hover:shadow-md cursor-pointer transition-all" onclick="App.openAccountPopup(${item.id})">
+                            <div class="bg-white rounded-lg p-3 shadow-sm border border-gray-100 flex hover:shadow-md transition-all">
                                 ${App.renderSortButtons('account', index, index === 0, index === s.accounts.length - 1)}
                                 <div class="flex-1 min-w-0">
-                                    <div class="flex justify-between items-start mb-1">
+                                    <div class="flex justify-between items-start mb-1 cursor-pointer" onclick="App.openAccountPopup(${item.id})">
                                         <span class="font-bold text-gray-800">${escapeHTML(item.name)}</span>
                                         <div class="flex gap-1 shrink-0">
                                             ${App.calcAmount(item.incomingAmount) > 0 ? `<button type="button" onclick="App.toggleDone('account', ${item.id}, event)" class="text-[10px] px-1.5 py-0.5 rounded border font-bold flex items-center ${item.isIncomingDone ? 'bg-emerald-100 text-emerald-800' : 'text-gray-500'}">${App.getIconHTML(item.isIncomingDone ? 'check' : 'done', 12)} 入金${item.isIncomingDone ? '済' : '予定'}</button>` : ''}
@@ -1101,10 +1029,18 @@
                                         </div>
                                     </div>
                                     ${item.memo ? `<div class="text-[10px] text-gray-400 mb-2 truncate">${App.getIconHTML('message-square', 10)} ${escapeHTML(item.memo)}</div>` : ''}
-                                    <div class="flex justify-between items-end gap-2">
-                                        <div class="flex-1 min-w-0"><span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">現在残高</span><span class="font-bold text-xl text-gray-800 break-words">${App.formatCurrency(item.amount)}</span>${App.calcAmount(item.incomingAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isIncomingDone ? 'text-gray-400 line-through font-normal' : 'text-emerald-600'}">+${App.getDisplayAmountHTML(item.incomingAmount, "inline-flex flex-row gap-1 items-baseline")} (入金予定)</div>` : ''}</div>
+                                    <div class="flex justify-between items-end gap-2 cursor-pointer" onclick="App.openAccountPopup(${item.id})">
+                                        <div class="flex-1 min-w-0">
+                                            <span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">現在残高</span>
+                                            <div class="flex items-baseline gap-2 flex-wrap">
+                                                <span class="font-bold text-xl text-gray-800 break-words">${App.formatCurrency(item.amount)}</span>
+                                                ${totalOut > 0 ? `<span class="text-[10px] text-rose-500 font-bold bg-rose-50 px-1.5 py-0.5 rounded border border-rose-100">引落合計: -${App.formatCurrency(totalOut)}</span>` : ''}
+                                            </div>
+                                            ${App.calcAmount(item.incomingAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isIncomingDone ? 'text-gray-400 line-through font-normal' : 'text-emerald-600'}">+${App.getDisplayAmountHTML(item.incomingAmount, "inline-flex flex-row gap-1 items-baseline")} (入金予定)</div>` : ''}
+                                        </div>
                                         ${(totalOut > 0 || incAmt > 0) ? `<div class="flex-1 text-right pl-2 border-l border-gray-100 min-w-0"><span class="text-[11px] text-gray-500 font-bold uppercase block mb-0.5">引落後予想</span><span class="font-bold text-xl break-words ${isShort ? 'text-red-600' : 'text-emerald-600'}">${isShort ? App.getIconHTML('alert-triangle', 14, 'inline mr-1 mb-0.5') : ''}${App.formatCurrency(expectedBal)}</span></div>` : ''}
                                     </div>
+                                    ${incomingAllocationsHTML}
                                     ${allocsHTML}
                                 </div>
                             </div>
@@ -1144,6 +1080,11 @@
                         const activeOut = item.isOutgoDone ? 0 : App.calcAmount(item.outgoAmount);
                         const expectedBal = App.calcAmount(item.amount) - activeOut;
                         const isShort = expectedBal < 0;
+
+                        const allocSum = s.allocations.filter(a => a.sourceType === 'wallet' && a.sourceId === item.id).reduce((sum, a) => sum + App.calcAmount(a.amount), 0);
+                        const remainAmount = expectedBal - allocSum;
+                        const allocsHTML = App.renderAllocations('wallet', item.id, remainAmount);
+
                         html += `
                             <div class="bg-white rounded-lg p-3 shadow-sm border border-gray-100 flex hover:shadow-md transition-all">
                                 ${App.renderSortButtons('wallet', index, index === 0, index === s.wallets.length - 1)}
@@ -1158,9 +1099,17 @@
                                     </div>
                                     ${item.memo ? `<div class="text-[10px] text-gray-400 mb-2 truncate">${App.getIconHTML('message-square', 10)} ${escapeHTML(item.memo)}</div>` : ''}
                                     <div class="flex justify-between items-end gap-2">
-                                        <div class="flex-1"><span class="text-[10px] text-gray-500 block">残高</span>${App.getDisplayAmountHTML(item.amount, "items-start text-sm text-gray-800")}${App.calcAmount(item.outgoAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isOutgoDone ? 'text-gray-400 line-through font-normal' : 'text-rose-600'}">-${App.getDisplayAmountHTML(item.outgoAmount, "inline-flex flex-row gap-1 items-baseline")}</div>` : ''}</div>
+                                        <div class="flex-1 min-w-0">
+                                            <span class="text-[10px] text-gray-500 block">残高</span>
+                                            <div class="flex items-baseline gap-2 flex-wrap">
+                                                ${App.getDisplayAmountHTML(item.amount, "items-start text-sm text-gray-800")}
+                                                ${activeOut > 0 ? `<span class="text-[10px] text-rose-500 font-bold bg-rose-50 px-1.5 py-0.5 rounded border border-rose-100">消費合計: -${App.formatCurrency(activeOut)}</span>` : ''}
+                                            </div>
+                                            ${App.calcAmount(item.outgoAmount) > 0 ? `<div class="text-[10px] font-bold mt-0.5 ${item.isOutgoDone ? 'text-gray-400 line-through font-normal' : 'text-rose-600'}">-${App.getDisplayAmountHTML(item.outgoAmount, "inline-flex flex-row gap-1 items-baseline")}</div>` : ''}
+                                        </div>
                                         ${activeOut > 0 ? `<div class="flex-1 text-right pl-2 border-l border-gray-100"><span class="text-[10px] text-gray-500 block">消費後予想</span><span class="font-bold text-sm ${isShort ? 'text-red-600' : 'text-amber-600'}">${App.formatCurrency(expectedBal)}</span></div>` : ''}
                                     </div>
+                                    ${allocsHTML}
                                 </div>
                             </div>
                         `;
@@ -1217,15 +1166,18 @@
                                 </div>
                             </div>
                             
-                            <div class="flex justify-end relative z-10 border-t pt-3">
-                                <button onclick="App.executeAutoAllocation()" class="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-md transition-colors flex items-center justify-center gap-1.5 shrink-0">
-                                    ${App.getIconHTML('calculate', 18)} 自動で各入金から不足口座へ割り振る
+                            <div class="flex flex-col sm:flex-row justify-end relative z-10 border-t pt-3 gap-2">
+                                <button onclick="App.resetAllocations()" class="px-4 py-2 text-xs font-bold rounded-lg border text-gray-600 bg-white hover:bg-gray-50 shadow-sm transition-colors flex items-center justify-center gap-1 shrink-0">
+                                    ${App.getIconHTML('refresh', 16)} 振分リセット
+                                </button>
+                                <button onclick="App.executeAutoAllocation()" class="flex-1 sm:flex-none px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-md transition-colors flex items-center justify-center gap-1.5 shrink-0">
+                                    ${App.getIconHTML('calculate', 18)} 自動で不足口座へ振り分ける
                                 </button>
                             </div>
                         </div>
 
                         <div class="rounded-2xl p-5 shadow-sm border bg-emerald-50/30 border-emerald-100">
-                            <h3 class="text-lg font-bold flex items-center gap-2 text-emerald-600 mb-4">${App.getIconHTML('arrow-down-to-line', 24)} 入金リストと振込指示</h3>
+                            <h3 class="text-lg font-bold flex items-center gap-2 text-emerald-600 mb-4">${App.getIconHTML('arrow-down-to-line', 24)} 入金リストと振替指示</h3>
                             <div class="space-y-4 mb-6">
                 `;
                 
@@ -1239,51 +1191,9 @@
                             </form>
                         `;
                     } else {
-                        // この入金からの割り振り指示を抽出
-                        const incAllocs = s.allocations.filter(al => al.incomeId === item.id);
-                        const incAmount = App.calcAmount(item.amount);
-                        const allocSum = incAllocs.reduce((sum, al) => sum + App.calcAmount(al.amount), 0);
-                        const remain = incAmount - allocSum;
-                        
-                        let allocsHTML = '';
-                        if (incAllocs.length > 0) {
-                            allocsHTML += `<div class="mt-3 space-y-1.5 border-t border-gray-100 pt-3">`;
-                            incAllocs.forEach(al => {
-                                const acc = s.accounts.find(a => a.id === al.accountId);
-                                const accName = acc ? acc.name : '不明な口座';
-                                
-                                if (s.editAllocationId === al.id) {
-                                    allocsHTML += `
-                                        <form onsubmit="App.saveEditAllocation(event, ${al.id}, ${item.id})" class="flex items-center gap-1 bg-white border border-blue-400 p-1.5 rounded-lg shadow-md animate-zoom-in ml-auto w-[90%] sm:w-[80%]">
-                                            <select name="accountId" class="flex-1 text-[11px] font-bold border border-gray-300 rounded p-1.5 text-gray-700 bg-gray-50">
-                                                ${s.accounts.map(a => `<option value="${a.id}" ${a.id === al.accountId ? 'selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}
-                                            </select>
-                                            <input name="amount" type="text" value="${escapeHTML(al.amount)}" class="w-20 text-[11px] font-bold border border-gray-300 rounded p-1.5" required/>
-                                            <button type="submit" class="px-2.5 py-1.5 bg-blue-600 text-white text-[10px] rounded font-bold">保存</button>
-                                            <button type="button" onclick="App.deleteAllocation(${al.id})" class="p-1.5 text-red-500 hover:bg-red-50 rounded">${App.getIconHTML('trash-2', 14)}</button>
-                                        </form>
-                                    `;
-                                } else {
-                                    allocsHTML += `
-                                        <div onclick="App.startEditAllocation(${al.id})" class="cursor-pointer flex items-center justify-between bg-blue-50/80 border border-blue-200 hover:border-blue-400 text-blue-800 px-2.5 py-1.5 rounded-lg text-[11px] ml-auto w-[90%] sm:w-[70%] transition-all shadow-sm group">
-                                            <span class="truncate opacity-80">➡️ ${escapeHTML(accName)} へ</span>
-                                            <div class="flex items-center gap-1.5 shrink-0">
-                                                <span class="font-bold">${App.formatCurrency(al.amount)}</span>
-                                                <span class="text-blue-400 group-hover:text-blue-600 transition-colors">${App.getIconHTML('pencil', 12)}</span>
-                                            </div>
-                                        </div>
-                                    `;
-                                }
-                            });
-                            allocsHTML += `</div>`;
-                        }
-
-                        allocsHTML += `
-                            <div class="mt-2 flex justify-between items-center text-[10px] ${incAllocs.length === 0 ? 'border-t border-gray-100 pt-2' : ''}">
-                                <button type="button" onclick="App.addAllocation(${item.id})" class="text-indigo-600 font-bold flex items-center hover:bg-indigo-50 px-1.5 py-1 rounded transition-colors border border-transparent hover:border-indigo-100">+ 振込先を追加</button>
-                                <span class="${remain < 0 ? 'text-red-600 font-bold bg-red-50 border border-red-200 px-1.5 py-0.5 rounded shadow-sm' : 'text-gray-500 font-bold'}">未割当: ${App.formatCurrency(remain)}</span>
-                            </div>
-                        `;
+                        const allocSum = s.allocations.filter(a => a.sourceType === 'income' && a.sourceId === item.id).reduce((sum, a) => sum + App.calcAmount(a.amount), 0);
+                        const remainAmount = App.calcAmount(item.amount) - allocSum;
+                        const allocsHTML = App.renderAllocations('income', item.id, remainAmount);
 
                         html += `
                             <div class="bg-white p-3 rounded-xl shadow-sm border border-gray-100 transition-all ${item.isDone ? 'opacity-40 bg-gray-50' : ''}">
@@ -2060,7 +1970,7 @@
                             <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl text-center animate-zoom-in">
                                 <div class="flex justify-center mb-4 text-red-500">${App.getIconHTML('error_outline', 40)}</div>
                                 <h3 class="text-xl font-bold text-gray-800 mb-2">バックアップ失敗</h3>
-                                <p class="text-sm text-gray-600 mb-6">iPhoneの仕様やブラウザの制限により、自動でのファイル作成に失敗しました。<br>「設定」タブから手動でテキストをコピーして保存してください。</p>
+                                <p class="text-sm text-gray-600 mb-6">iPhoneの仕様やブラウザの制限により、自動でのファイル作成に失敗しました。<br>「設定」タブから手持でテキストをコピーして保存してください。</p>
                                 <button onclick="App.closeModal('showBackupErrorModal')" class="w-full py-2.5 bg-gray-800 text-white font-bold rounded-lg hover:bg-gray-700">閉じる</button>
                             </div>
                         </div>
