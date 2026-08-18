@@ -95,6 +95,7 @@
                 exportData: '', importData: '', importMsg: { text: '', isError: false }, copySuccess: false,
                 saveMonthStr: '', manualHistoryMonth: '',
                 selectedHistoryId: null, historyEditMode: null, tempHistoryEditData: null,
+                confirmResetAllocations: false, confirmManualReset: false, confirmDeleteSubItem: null, alertMessage: null,
             },
 
             getIconHTML: function(name, size = 24, className = '') {
@@ -461,9 +462,22 @@
                 });
             },
 
+            requestResetAllocations: function() {
+                App.state.confirmResetAllocations = true;
+                App.render();
+            },
+
+            executeResetAllocations: function() {
+                App.state.allocations = [];
+                App.syncAllocationsToAccounts();
+                App.saveData();
+                App.state.confirmResetAllocations = false;
+                App.render();
+            },
+
             addAllocation: function(sourceType, sourceId) {
                 if (App.state.accounts.length === 0 && App.state.wallets.length === 0) {
-                    alert('先に「口座と現金」タブから口座を登録してください。'); return;
+                    App.showAlert('先に「口座と現金」タブから口座を登録してください。'); return;
                 }
                 const newId = Date.now() + Math.random();
                 const targetType = App.state.accounts.length > 0 ? 'account' : 'wallet';
@@ -509,7 +523,7 @@
                 const otherSum = otherAllocs.reduce((s, a) => s + App.calcAmount(a.amount), 0);
                 
                 if (otherSum + valNum > sourceLimit) {
-                    alert('エラー：割り振り可能額 (' + App.formatCurrency(sourceLimit) + ') を超過しています！\n金額を減らすか、他の割り振りを削除してください。');
+                    App.showAlert('エラー：割り振り可能額 (' + App.formatCurrency(sourceLimit) + ') を超過しています！\n金額を減らすか、他の割り振りを削除してください。');
                     return;
                 }
 
@@ -633,11 +647,20 @@
                 else { App.state[t.type + 's'] = App.state[t.type + 's'].filter(item => item.id !== t.id); }
                 App.state.deleteTarget = null; App.saveData(); App.render();
             },
+            
+            showAlert: function(msg) {
+                App.state.alertMessage = msg;
+                App.render();
+            },
+
             closeModal: function(modalName) { 
                 App.state[modalName] = null; 
                 if (modalName === 'showAutoSaveModal') App.state.showAutoSaveModal = false; 
                 if (modalName === 'showSuccessModal') App.state.showSuccessModal = false; 
                 if (modalName === 'showBackupErrorModal') App.state.showBackupErrorModal = false;
+                if (modalName === 'confirmResetAllocations') App.state.confirmResetAllocations = false;
+                if (modalName === 'confirmManualReset') App.state.confirmManualReset = false;
+                if (modalName === 'alertMessage') App.state.alertMessage = null;
                 App.render(); 
             },
             openAccountPopup: function(id) { App.state.selectedAccountPopup = id; App.render(); },
@@ -667,9 +690,15 @@
                 App.state.allocations = []; 
             },
             handleManualResetClick: function() {
-                if (window.confirm('すべての「済」を解除し、変動費の金額をリセットします。')) {
-                    App.executeMonthlyReset(); App.saveData(); App.render(); alert('リセットしました。');
-                }
+                App.state.confirmManualReset = true;
+                App.render();
+            },
+            executeManualReset: function() {
+                App.executeMonthlyReset(); 
+                App.saveData(); 
+                App.state.confirmManualReset = false;
+                App.showAlert('リセットしました。');
+                App.render();
             },
 
             handleAutoSaveConfirm: function() {
@@ -689,17 +718,22 @@
                 }
             },
 
-            executeDeleteSubItem: function(paymentId, subId) {
-                if (window.confirm('この内訳を削除しますか？')) {
-                    App.state.payments = App.state.payments.map(p => {
-                        if (p.id === paymentId) {
-                            return { ...p, subItems: (p.subItems || []).filter(s => s.id !== subId) };
-                        }
-                        return p;
-                    });
-                    App.saveData();
-                    App.render();
-                }
+            requestDeleteSubItem: function(paymentId, subId) {
+                App.state.confirmDeleteSubItem = { paymentId, subId };
+                App.render();
+            },
+            
+            executeDeleteSubItemConfirm: function() {
+                const { paymentId, subId } = App.state.confirmDeleteSubItem;
+                App.state.payments = App.state.payments.map(p => {
+                    if (p.id === paymentId) {
+                        return { ...p, subItems: (p.subItems || []).filter(s => s.id !== subId) };
+                    }
+                    return p;
+                });
+                App.state.confirmDeleteSubItem = null;
+                App.saveData();
+                App.render();
             },
 
             startHistoryEdit: function(id) {
@@ -754,7 +788,7 @@
                 App.calculateTotals();
                 const targetMonth = App.state.manualHistoryMonth;
                 if (!targetMonth) {
-                    alert('月を選択してください。');
+                    App.showAlert('月を選択してください。');
                     return;
                 }
                 const [y, m] = targetMonth.split('-');
@@ -834,7 +868,7 @@
                     App.render();
                     setTimeout(() => { App.state.copySuccess = false; App.render(); }, 2000);
                 } catch (e) {
-                    alert("コピーに失敗しました。テキストエリアを選択して手動でコピーしてください。");
+                    App.showAlert("コピーに失敗しました。テキストエリアを選択して手動でコピーしてください。");
                 }
             },
             handleFileUpload: function(input) {
@@ -1006,7 +1040,7 @@
                                 <p class="mb-4 text-sm font-bold">画面が真っ白になるのを防ぐため、この画面を表示しています。</p>
                                 <p class="mb-8 text-xs bg-white p-4 rounded border border-red-200 text-left w-full max-w-md overflow-auto text-red-500">${escapeHTML(error.message)}</p>
                                 <button onclick="window.location.reload()" class="px-6 py-3 bg-red-600 text-white rounded-lg font-bold mb-4 shadow-md">画面を再読み込みして直す</button>
-                                <button onclick="if(window.confirm('データを全て消去して初期状態に戻しますか？(復元できません)')) { localStorage.clear(); window.location.reload(); }" class="px-4 py-2 bg-gray-400 text-white rounded-lg font-bold text-xs">データを初期化する</button>
+                                <button onclick="localStorage.clear(); window.location.reload();" class="px-4 py-2 bg-gray-400 text-white rounded-lg font-bold text-xs">データを強制初期化する(警告なし)</button>
                             </div>
                         `;
                     }
@@ -1269,10 +1303,10 @@
                             </div>
                             
                             <div class="flex flex-col sm:flex-row justify-end relative z-10 border-t pt-3 gap-2">
-                                <button onclick="App.resetAllocations()" class="px-4 py-2 text-xs font-bold rounded-lg border text-gray-600 bg-white hover:bg-gray-50 shadow-sm transition-colors flex items-center justify-center gap-1 shrink-0">
+                                <button type="button" onclick="App.requestResetAllocations()" class="px-4 py-2 text-xs font-bold rounded-lg border text-gray-600 bg-white hover:bg-gray-50 shadow-sm transition-colors flex items-center justify-center gap-1 shrink-0">
                                     ${App.getIconHTML('refresh', 16)} 振分リセット
                                 </button>
-                                <button onclick="App.executeAutoAllocation()" class="flex-1 sm:flex-none px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-md transition-colors flex items-center justify-center gap-1.5 shrink-0">
+                                <button type="button" onclick="App.executeAutoAllocation()" class="flex-1 sm:flex-none px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-md transition-colors flex items-center justify-center gap-1.5 shrink-0">
                                     ${App.getIconHTML('calculate', 18)} 自動で各入金から不足口座へ割り振る
                                 </button>
                             </div>
@@ -1467,7 +1501,7 @@
                                                     <div class="flex items-center gap-2"><span class="text-gray-800 font-medium">${escapeHTML(sub.name)}</span><span class="text-[9px] px-1.5 rounded font-bold ${subCat.bg} ${subCat.color}">${subCat.label}</span></div>
                                                     ${sub.memo ? `<span class="text-[10px] text-gray-400 truncate">${escapeHTML(sub.memo)}</span>` : ''}
                                                 </div>
-                                                <div class="flex items-center gap-1.5 shrink-0">${App.getDisplayAmountHTML(sub.amount, "text-sm text-gray-700")}<button type="button" onclick="App.startEdit('subItem', ${sub.id})" class="text-gray-300 hover:text-blue-500">${App.getIconHTML('pencil', 14)}</button><button type="button" onclick="App.executeDeleteSubItem(${item.id}, ${sub.id})" class="text-gray-300 hover:text-red-500">${App.getIconHTML('trash-2', 14)}</button></div>
+                                                <div class="flex items-center gap-1.5 shrink-0">${App.getDisplayAmountHTML(sub.amount, "text-sm text-gray-700")}<button type="button" onclick="App.startEdit('subItem', ${sub.id})" class="text-gray-300 hover:text-blue-500">${App.getIconHTML('pencil', 14)}</button><button type="button" onclick="App.requestDeleteSubItem(${item.id}, ${sub.id})" class="text-gray-300 hover:text-red-500">${App.getIconHTML('trash-2', 14)}</button></div>
                                             </li>
                                         `;
                                     }
@@ -2212,6 +2246,54 @@
                             </div>
                         `;
                     }
+                }
+
+                if (s.alertMessage) {
+                    html += `
+                        <div class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[110] p-4 animate-fade-in">
+                            <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl text-center animate-zoom-in">
+                                <div class="flex justify-center mb-4 text-indigo-500">${App.getIconHTML('info', 32)}</div>
+                                <p class="text-sm text-gray-700 mb-6 whitespace-pre-wrap leading-relaxed">${escapeHTML(s.alertMessage)}</p>
+                                <button onclick="App.closeModal('alertMessage')" class="w-full py-2.5 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700">OK</button>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                if (s.confirmResetAllocations) {
+                    html += `
+                        <div class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-fade-in">
+                            <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-zoom-in">
+                                <div class="flex items-center gap-3 text-red-600 mb-4">${App.getIconHTML('alert-triangle', 28)}<h3 class="text-lg font-bold">リセットの確認</h3></div>
+                                <p class="text-gray-600 mb-6 leading-relaxed">現在の割り振りをすべてリセットしますか？</p>
+                                <div class="flex justify-end gap-3"><button onclick="App.closeModal('confirmResetAllocations')" class="px-4 py-2 hover:bg-gray-100 rounded-lg font-bold text-gray-600">キャンセル</button><button onclick="App.executeResetAllocations()" class="px-4 py-2 bg-red-500 text-white font-bold rounded-lg">リセットする</button></div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                if (s.confirmManualReset) {
+                    html += `
+                        <div class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-fade-in">
+                            <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-zoom-in">
+                                <div class="flex items-center gap-3 text-red-600 mb-4">${App.getIconHTML('alert-triangle', 28)}<h3 class="text-lg font-bold">月替わりリセットの確認</h3></div>
+                                <p class="text-gray-600 mb-6 leading-relaxed">すべての「済」を解除し、変動費の金額をリセットします。よろしいですか？</p>
+                                <div class="flex justify-end gap-3"><button onclick="App.closeModal('confirmManualReset')" class="px-4 py-2 hover:bg-gray-100 rounded-lg font-bold text-gray-600">キャンセル</button><button onclick="App.executeManualReset()" class="px-4 py-2 bg-red-500 text-white font-bold rounded-lg">実行する</button></div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                if (s.confirmDeleteSubItem) {
+                    html += `
+                        <div class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-fade-in">
+                            <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-zoom-in">
+                                <div class="flex items-center gap-3 text-red-600 mb-4">${App.getIconHTML('alert-triangle', 28)}<h3 class="text-lg font-bold">削除の確認</h3></div>
+                                <p class="text-gray-600 mb-6 leading-relaxed">この内訳を削除しますか？</p>
+                                <div class="flex justify-end gap-3"><button onclick="App.closeModal('confirmDeleteSubItem')" class="px-4 py-2 hover:bg-gray-100 rounded-lg font-bold text-gray-600">キャンセル</button><button onclick="App.executeDeleteSubItemConfirm()" class="px-4 py-2 bg-red-500 text-white font-bold rounded-lg">削除する</button></div>
+                            </div>
+                        </div>
+                    `;
                 }
 
                 return html;
