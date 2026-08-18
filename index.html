@@ -316,7 +316,8 @@
                 });
 
                 const remainingIncomes = Math.max(0, activeIncomesList - activeTargetIncomes);
-                const activeFinalBalance = totalAccountsNum + totalWalletsNum + activeTargetIncomes + remainingIncomes - activePayments - activeWalletsOutgo;
+                // 確保している資金（口座＋現金＋未済入金）から、残りの支払い（未済引落＋未済消費＋特別支出当月分）を引く
+                const activeFinalBalance = totalAccountsNum + totalWalletsNum + activeIncomesList - activePayments - activeWalletsOutgo;
                 const calculatedEndBalance = totalAccountsNum + totalWalletsNum;
 
                 App.totals = { 
@@ -1702,7 +1703,7 @@
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div class="p-6 bg-blue-50 rounded-2xl border border-blue-100 flex flex-col justify-between">
                                 <div><p class="text-sm text-blue-600 font-bold mb-1">確保している資金</p><p class="text-xs text-blue-400 mb-4">全口座・現金 ＋ 未済の入金総額</p></div>
-                                <p class="text-3xl font-black text-blue-800">${App.formatCurrency(tot.totalAccountsNum + tot.totalWalletsNum + tot.activeTargetIncomes + tot.remainingIncomes)}</p>
+                                <p class="text-3xl font-black text-blue-800">${App.formatCurrency(tot.totalAccountsNum + tot.totalWalletsNum + tot.activeIncomesList)}</p>
                             </div>
                             <div class="p-6 bg-rose-50 rounded-2xl border border-rose-100 flex flex-col justify-between">
                                 <div><p class="text-sm text-rose-600 font-bold mb-1">残りの支払い合計</p><p class="text-xs text-rose-400 mb-4">未済引落・消費 ＋ 当月の特別支出</p></div>
